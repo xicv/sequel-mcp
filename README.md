@@ -11,26 +11,81 @@ A Model Context Protocol server that lets Claude (or any MCP client) talk to MyS
 
 ## Install
 
+### Requirements
+
+- macOS 12+ (Apple Silicon or Intel) — Keychain + Touch ID rely on macOS APIs.
+- Node.js 20+
+- (optional) Xcode Command Line Tools — for the Touch ID helper. Install with `xcode-select --install`.
+
+### Option A — From source (recommended today)
+
+```bash
+git clone https://github.com/xicv/sequel-ace-mcp.git
+cd sequel-ace-mcp
+npm install
+npm run build
+npm run build:touchid     # optional — Swift LocalAuthentication helper
+```
+
+The MCP entry point is now at `<repo>/dist/index.js`.
+
+### Option B — From npm (when published)
+
 ```bash
 npm install -g sequel-ace-mcp
-# or run via npx without installing:
+# or use ad-hoc with no install:
 # npx -y sequel-ace-mcp
 ```
 
-Add to `~/Library/Application Support/Claude/claude_desktop_config.json`:
+### Wire into Claude Code
+
+```bash
+claude mcp add --scope user sequel-ace -- node /absolute/path/to/sequel-ace-mcp/dist/index.js
+```
+
+Verify:
+
+```bash
+claude mcp list   # sequel-ace should appear with ✓ Connected
+```
+
+In a CC session, `/mcp` lists every tool the server exposes (13 at v0.1.0).
+
+### Wire into Claude Desktop
+
+Edit `~/Library/Application Support/Claude/claude_desktop_config.json`:
 
 ```json
 {
   "mcpServers": {
     "sequel-ace": {
-      "command": "npx",
-      "args": ["-y", "sequel-ace-mcp"]
+      "command": "node",
+      "args": ["/absolute/path/to/sequel-ace-mcp/dist/index.js"]
     }
   }
 }
 ```
 
-There are **no credentials** in this config. Passwords go through the `add_connection` tool's elicitation flow into the macOS Keychain.
+Restart Claude Desktop.
+
+### Wire into Cursor / other MCP clients
+
+Any client that speaks the MCP stdio transport works. Point its `command` at `node` and `args` at the absolute path of `dist/index.js`.
+
+### First-run quickstart
+
+Either of:
+
+- **"Use sequel-ace MCP. Import my Sequel Ace connections."** — calls `import_from_sequel_ace`. macOS will prompt once per favorite to allow Keychain access; click "Always Allow". Imported connections default to the read-only preset.
+- **"Use sequel-ace MCP. Add a connection 'local' on 127.0.0.1:3306, user root, database app, read-only preset."** — calls `add_connection`. The MCP elicits the password mid-call; it goes straight to the macOS Keychain. No password ever appears in your chat or any config file.
+
+Then:
+
+> "Set the default connection to local."
+>
+> "Count rows in users."
+
+There are **no credentials in `claude_desktop_config.json`** or any other config file. Passwords live only in the macOS Keychain.
 
 ## Action sets (the permission model)
 
