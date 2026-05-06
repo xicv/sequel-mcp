@@ -10,15 +10,17 @@ A Model Context Protocol server for **MySQL/MariaDB** with policy-gated action s
 
 > Renamed from `sequel-ace-mcp` (≤ 0.1.0) → `sequel-mcp` (0.1.1+). Migration: `npx -y sequel-mcp-migrate` (non-destructive).
 
-## What's in 0.4.0
+## Capabilities
 
-- **Two-layer permissions** — connection-level baseline cascades to all DBs; per-database overrides take precedence; strictest-wins for multi-DB statements (Apache Ranger semantics, fail-closed).
-- **Pre-mutation backups** — UPDATE/DELETE/REPLACE/INSERT/TRUNCATE/DROP/ALTER captured into a local SQLite. Multi-table UPDATE/DELETE produce one backup per mutated table. INSERT and REPLACE rollback hints included.
-- **Restore from any backup** — `restore_backup` plans + executes. Default `dryRun=true`. Subject to the same policy gate as live writes.
-- **Audit log** — every tool call written to `~/.local/share/sequel-mcp/audit.sqlite` with redacted SQL, decision, outcome, duration, target databases, backup_id linkage. Optional SHA-256 prev-hash chain for tamper-evidence.
-- **Per-category retention** — `read=7d / write=30d / ddl=90d / admin=180d / txCtrl=7d`. Auto-cleanup runs lazily on server boot.
+Current release: **v0.4.0**. Full version history: [CHANGELOG.md](./CHANGELOG.md).
+
+- **Two-layer permissions** — connection-level baseline + per-database overrides; strictest-wins for multi-DB statements (fail-closed).
+- **Pre-mutation backups** for UPDATE / DELETE / REPLACE / INSERT / TRUNCATE / DROP / ALTER, including multi-table UPDATE/DELETE.
+- **Restore from any backup** via `restore_backup`. Plans + executes; default `dryRun=true`. Subject to the same policy gate as live writes.
+- **Append-only audit log** at `~/.local/share/sequel-mcp/audit.sqlite` — redacted SQL, decision, outcome, duration, backup_id linkage; optional SHA-256 prev-hash chain.
+- **Per-category retention** — `read=7d / write=30d / ddl=90d / admin=180d / txCtrl=7d`; auto-cleanup on boot.
 - **Unified history search** — merges our audit log with Sequel Ace's `queryHistory.db` (when present) into one timeline.
-- **macOS-native security** — passwords in Keychain (non-syncable, `WhenUnlockedThisDeviceOnly`); Touch ID gate via `LocalAuthentication`; SSH tunnels via `ssh2`.
+- **macOS-native security** — Keychain-stored passwords (non-syncable, `WhenUnlockedThisDeviceOnly`); Touch ID via `LocalAuthentication`; SSH tunnels via `ssh2`.
 
 ## Install
 
