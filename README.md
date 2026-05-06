@@ -1,5 +1,9 @@
 # sequel-ace-mcp
 
+[![npm](https://img.shields.io/npm/v/sequel-ace-mcp.svg)](https://www.npmjs.com/package/sequel-ace-mcp)
+[![CI](https://github.com/xicv/sequel-ace-mcp/actions/workflows/ci.yml/badge.svg)](https://github.com/xicv/sequel-ace-mcp/actions/workflows/ci.yml)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](./LICENSE)
+
 A Model Context Protocol server that lets Claude (or any MCP client) talk to MySQL/MariaDB databases using the connections you've already saved in [Sequel Ace](https://sequel-ace.com), with **policy-gated action sets** (allow / confirm / deny per category) and **macOS Keychain credential storage** that never leaves your Mac.
 
 ## Why
@@ -17,7 +21,17 @@ A Model Context Protocol server that lets Claude (or any MCP client) talk to MyS
 - Node.js 20+
 - (optional) Xcode Command Line Tools — for the Touch ID helper. Install with `xcode-select --install`.
 
-### Option A — From source (recommended today)
+### Option A — From npm (recommended)
+
+No install needed — npx fetches and runs the latest release on demand:
+
+```bash
+npx -y sequel-ace-mcp
+# or, install globally if you prefer:
+# npm install -g sequel-ace-mcp
+```
+
+### Option B — From source
 
 ```bash
 git clone https://github.com/xicv/sequel-ace-mcp.git
@@ -27,20 +41,16 @@ npm run build
 npm run build:touchid     # optional — Swift LocalAuthentication helper
 ```
 
-The MCP entry point is now at `<repo>/dist/index.js`.
-
-### Option B — From npm (when published)
-
-```bash
-npm install -g sequel-ace-mcp
-# or use ad-hoc with no install:
-# npx -y sequel-ace-mcp
-```
+The MCP entry point is then at `<repo>/dist/index.js`.
 
 ### Wire into Claude Code
 
 ```bash
-claude mcp add --scope user sequel-ace -- node /absolute/path/to/sequel-ace-mcp/dist/index.js
+# npx (recommended):
+claude mcp add --scope user sequel-ace -- npx -y sequel-ace-mcp
+
+# Or pointing at a local source clone:
+# claude mcp add --scope user sequel-ace -- node /absolute/path/to/sequel-ace-mcp/dist/index.js
 ```
 
 Verify:
@@ -59,11 +69,17 @@ Edit `~/Library/Application Support/Claude/claude_desktop_config.json`:
 {
   "mcpServers": {
     "sequel-ace": {
-      "command": "node",
-      "args": ["/absolute/path/to/sequel-ace-mcp/dist/index.js"]
+      "command": "npx",
+      "args": ["-y", "sequel-ace-mcp"]
     }
   }
 }
+```
+
+Or, for a local source clone, replace with:
+
+```json
+{ "command": "node", "args": ["/absolute/path/to/sequel-ace-mcp/dist/index.js"] }
 ```
 
 Restart Claude Desktop.
