@@ -2,6 +2,18 @@
 
 All notable changes to **sequel-mcp** are documented here. Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.1] — 2026-05-06
+
+### Changed
+
+- README + CHANGELOG: replaced environment-specific placeholders (`AVCRM PROD` → `acme-prod`, `rpa_staging` → `staging`).
+- Repo history rewritten via `git filter-repo` to scrub the old names from every commit. Tags re-pointed; force-pushed to `main`.
+- Older npm versions (`<0.4.1`) deprecated; please upgrade.
+
+### Note
+
+No code change. This is a docs-and-history-only release.
+
 ## [0.4.0] — 2026-05-06
 
 ### Added
@@ -126,6 +138,7 @@ MCP server that lets Claude run MySQL/MariaDB queries via Sequel Ace's saved con
 - CONTRIBUTING.md with credentials-and-PII rules
 - `scripts/check-secrets.sh` local regex scanner + optional pre-commit hook
 
+[0.4.1]: https://github.com/xicv/sequel-mcp/releases/tag/v0.4.1
 [0.4.0]: https://github.com/xicv/sequel-mcp/releases/tag/v0.4.0
 [0.3.0]: https://github.com/xicv/sequel-mcp/releases/tag/v0.3.0
 [0.2.0]: https://github.com/xicv/sequel-mcp/releases/tag/v0.2.0
