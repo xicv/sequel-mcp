@@ -1,15 +1,15 @@
 #!/usr/bin/env node
 /**
- * sequel-ace-mcp doctor — diagnostic report for the local install.
+ * sequel-mcp doctor — diagnostic report for the local install.
  *
  * Prints a sanitized summary: versions, configured connections (host/user/db only,
  * NEVER passwords), Keychain entry presence, SSH key file presence, MCP boot
  * smoke check. Intended for sharing with maintainers when filing a bug.
  *
  * Usage:
- *   sequel-ace-mcp-doctor                # default text report
- *   sequel-ace-mcp-doctor --json         # machine-readable
- *   sequel-ace-mcp-doctor --probe        # additionally try mysql2 connect (no SQL)
+ *   sequel-mcp-doctor                # default text report
+ *   sequel-mcp-doctor --json         # machine-readable
+ *   sequel-mcp-doctor --probe        # additionally try mysql2 connect (no SQL)
  */
 import fs from 'node:fs/promises';
 import os from 'node:os';

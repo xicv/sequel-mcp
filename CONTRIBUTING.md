@@ -1,4 +1,4 @@
-# Contributing to sequel-ace-mcp
+# Contributing to sequel-mcp
 
 Thanks for considering a contribution. This project handles real database credentials, so the contribution rules are stricter than usual around what may enter the repository.
 

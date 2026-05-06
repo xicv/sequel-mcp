@@ -42,7 +42,7 @@ function buildBaseOptions(args: { connection: Connection; password: string; data
 }
 
 function log(msg: string): void {
-  process.stderr.write(`[sequel-ace-mcp] ${msg}\n`);
+  process.stderr.write(`[sequel-mcp] ${msg}\n`);
 }
 
 export async function executeStatement(params: ExecuteParams): Promise<ExecuteResult> {

@@ -28,7 +28,7 @@ import { executeStatement } from './sql/executor.js';
 import { importFromSequelAce } from './importer/sequelAcePlist.js';
 import { makeConfirmFn } from './elicit/confirm.js';
 
-const PACKAGE_NAME = 'sequel-ace-mcp';
+const PACKAGE_NAME = 'sequel-mcp';
 const PACKAGE_VERSION = '0.1.0';
 
 function toolError(text: string): CallToolResult {
@@ -390,7 +390,7 @@ function registerTools(mcp: McpServer, deps: ToolDeps): void {
         })),
       );
       return jsonResult({
-        app: 'sequel-ace-mcp',
+        app: 'sequel-mcp',
         version: PACKAGE_VERSION,
         runtime: {
           node: process.versions.node,
@@ -643,7 +643,7 @@ function registerResources(
 ): void {
   mcp.registerResource(
     'connections',
-    'sequel-ace-mcp://connections',
+    'sequel-mcp://connections',
     {
       title: 'Configured connections',
       description: 'JSON listing of saved connections (no secrets).',
@@ -667,7 +667,7 @@ function registerResources(
       return {
         contents: [
           {
-            uri: 'sequel-ace-mcp://connections',
+            uri: 'sequel-mcp://connections',
             mimeType: 'application/json',
             text: JSON.stringify({ connections: items }, null, 2),
           },

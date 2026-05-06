@@ -20,7 +20,7 @@ This MCP server runs locally on the user's Mac as a child process of an MCP clie
 |------------------------------------|------------------------------------------------------------------------|---------------------------------------------------------------------------------------------------------------------------|
 | Database passwords                 | macOS Keychain via `@napi-rs/keyring`                                  | `WhenUnlockedThisDeviceOnly`, non-syncable. Never written to disk in plaintext. Never sent to any cloud service.          |
 | SSH tunnel passphrases             | macOS Keychain (`<conn-name>::ssh` service)                            | Same as above.                                                                                                            |
-| Connection metadata (host/user/db) | `~/.config/sequel-ace-mcp/config.json`, `0o600` permissions            | Local file only. No passwords stored here.                                                                                |
+| Connection metadata (host/user/db) | `~/.config/sequel-mcp/config.json`, `0o600` permissions            | Local file only. No passwords stored here.                                                                                |
 | Per-statement intent               | In-memory only                                                         | Confirmation tokens never persisted.                                                                                      |
 
 ### Boundaries enforced by this server

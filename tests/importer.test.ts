@@ -55,7 +55,7 @@ describe('readFavoritesPlist', () => {
   let tmpFile: string;
 
   beforeEach(async () => {
-    tmpFile = path.join(os.tmpdir(), `sequel-ace-mcp-fav-${Date.now()}.plist`);
+    tmpFile = path.join(os.tmpdir(), `sequel-mcp-fav-${Date.now()}.plist`);
     await fs.writeFile(tmpFile, PLIST, 'utf8');
   });
 

@@ -6,7 +6,7 @@ async function main(): Promise<void> {
   const server = buildServer();
   const transport = new StdioServerTransport();
   await server.connect(transport);
-  process.stderr.write('sequel-ace-mcp ready\n');
+  process.stderr.write('sequel-mcp ready\n');
 }
 
 main().catch((err) => {

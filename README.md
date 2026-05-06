@@ -1,10 +1,12 @@
-# sequel-ace-mcp
+# sequel-mcp
 
-[![npm](https://img.shields.io/npm/v/sequel-ace-mcp.svg)](https://www.npmjs.com/package/sequel-ace-mcp)
-[![CI](https://github.com/xicv/sequel-ace-mcp/actions/workflows/ci.yml/badge.svg)](https://github.com/xicv/sequel-ace-mcp/actions/workflows/ci.yml)
+[![npm](https://img.shields.io/npm/v/sequel-mcp.svg)](https://www.npmjs.com/package/sequel-mcp)
+[![CI](https://github.com/xicv/sequel-mcp/actions/workflows/ci.yml/badge.svg)](https://github.com/xicv/sequel-mcp/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](./LICENSE)
 
-A Model Context Protocol server that lets Claude (or any MCP client) talk to MySQL/MariaDB databases using the connections you've already saved in [Sequel Ace](https://sequel-ace.com), with **policy-gated action sets** (allow / confirm / deny per category) and **macOS Keychain credential storage** that never leaves your Mac.
+A Model Context Protocol server for MySQL/MariaDB with **policy-gated action sets** (allow / confirm / deny per category) and **macOS Keychain credential storage** that never leaves your Mac. Optional one-time import of [Sequel Ace](https://sequel-ace.com) favorites.
+
+> Renamed from `sequel-ace-mcp` (≤ 0.1.0) → `sequel-mcp` (0.1.1+). The package was renamed because it's a fully standalone MySQL/MariaDB MCP — Sequel Ace is supported via an optional importer, not required. Migration: `npx -y sequel-mcp sequel-mcp-migrate` (copies config + Keychain entries from the old name; non-destructive).
 
 ## Why
 
@@ -26,16 +28,16 @@ A Model Context Protocol server that lets Claude (or any MCP client) talk to MyS
 No install needed — npx fetches and runs the latest release on demand:
 
 ```bash
-npx -y sequel-ace-mcp
+npx -y sequel-mcp
 # or, install globally if you prefer:
-# npm install -g sequel-ace-mcp
+# npm install -g sequel-mcp
 ```
 
 ### Option B — From source
 
 ```bash
-git clone https://github.com/xicv/sequel-ace-mcp.git
-cd sequel-ace-mcp
+git clone https://github.com/xicv/sequel-mcp.git
+cd sequel-mcp
 npm install
 npm run build
 npm run build:touchid     # optional — Swift LocalAuthentication helper
@@ -47,10 +49,10 @@ The MCP entry point is then at `<repo>/dist/index.js`.
 
 ```bash
 # npx (recommended):
-claude mcp add --scope user sequel-ace -- npx -y sequel-ace-mcp
+claude mcp add --scope user sequel-ace -- npx -y sequel-mcp
 
 # Or pointing at a local source clone:
-# claude mcp add --scope user sequel-ace -- node /absolute/path/to/sequel-ace-mcp/dist/index.js
+# claude mcp add --scope user sequel-ace -- node /absolute/path/to/sequel-mcp/dist/index.js
 ```
 
 Verify:
@@ -70,7 +72,7 @@ Edit `~/Library/Application Support/Claude/claude_desktop_config.json`:
   "mcpServers": {
     "sequel-ace": {
       "command": "npx",
-      "args": ["-y", "sequel-ace-mcp"]
+      "args": ["-y", "sequel-mcp"]
     }
   }
 }
@@ -79,7 +81,7 @@ Edit `~/Library/Application Support/Claude/claude_desktop_config.json`:
 Or, for a local source clone, replace with:
 
 ```json
-{ "command": "node", "args": ["/absolute/path/to/sequel-ace-mcp/dist/index.js"] }
+{ "command": "node", "args": ["/absolute/path/to/sequel-mcp/dist/index.js"] }
 ```
 
 Restart Claude Desktop.
@@ -163,7 +165,7 @@ Set once, omit `connection` (and optionally `database`) on every subsequent call
 
 ## Resources
 
-- `sequel-ace-mcp://connections` — JSON listing of saved connections (no secrets).
+- `sequel-mcp://connections` — JSON listing of saved connections (no secrets).
 
 ## Defence in depth
 
@@ -180,7 +182,7 @@ Set once, omit `connection` (and optionally `database`) on every subsequent call
 
 - Stored via `@napi-rs/keyring` → macOS Keychain Services API.
 - Default attributes: non-syncable, `WhenUnlockedThisDeviceOnly`. Not iCloud Keychain.
-- Service name: `sequel-ace-mcp : <connection-name>`. Account: DB user. Visible in `Keychain Access.app` so you can revoke any time.
+- Service name: `sequel-mcp : <connection-name>`. Account: DB user. Visible in `Keychain Access.app` so you can revoke any time.
 - We **never** read Sequel Ace's keychain at runtime (its items belong to its sandboxed bundle ID and would prompt every time). The one-time `import_from_sequel_ace` tool calls `/usr/bin/security` once per item — macOS prompts you "Always Allow / Allow / Deny", and we copy the result into our own service namespace.
 
 ## Touch ID
@@ -191,12 +193,31 @@ Set `requireTouchID: true` on a connection's policy. The first SQL operation aft
 
 If a connection has SSH details (auto-imported from Sequel Ace), `executeStatement` opens an `ssh2` local-to-remote tunnel before connecting `mysql2`. SSH passwords/passphrases live in Keychain under `<conn-name>::ssh`.
 
+## Migrating from sequel-ace-mcp
+
+If you previously installed `sequel-ace-mcp@0.1.0`, run:
+
+```bash
+npx -y sequel-mcp-migrate          # if installed via npm
+# or from a source checkout:
+# node dist/migrate.js
+```
+
+Copies `~/.config/sequel-ace-mcp/config.json` → `~/.config/sequel-mcp/config.json` and re-keys macOS Keychain entries from service `sequel-ace-mcp : <name>` to `sequel-mcp : <name>`. Non-destructive by default — old entries stay until you pass `--purge`. Add `--force` to overwrite an existing new-name config. Add `--json` for machine-readable output.
+
+After migration, update your MCP client config:
+
+```bash
+claude mcp remove sequel-ace
+claude mcp add --scope user sequel-mcp -- npx -y sequel-mcp
+```
+
 ## Doctor / debugging
 
 ```bash
 npm run doctor                        # text report (after npm run build)
 node dist/doctor.js --json            # machine-readable
-sequel-ace-mcp-doctor                 # if installed globally
+sequel-mcp-doctor                 # if installed globally
 ```
 
 Or call the `doctor` MCP tool from Claude:
