@@ -11,7 +11,9 @@ import {
 } from '../types.js';
 import { configDir, configPath } from './paths.js';
 
-const EMPTY_CONFIG: Config = { version: 1, connections: [] };
+function emptyConfig(): Config {
+  return ConfigSchema.parse({ version: 1, connections: [] });
+}
 
 export async function loadConfig(): Promise<Config> {
   try {
@@ -20,7 +22,7 @@ export async function loadConfig(): Promise<Config> {
     return ConfigSchema.parse(parsed);
   } catch (e) {
     const code = (e as NodeJS.ErrnoException).code;
-    if (code === 'ENOENT') return EMPTY_CONFIG;
+    if (code === 'ENOENT') return emptyConfig();
     throw e;
   }
 }

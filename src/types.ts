@@ -15,9 +15,15 @@ export const PolicySchema = z.object({
   rowCap: z.number().int().positive().max(100000).default(1000),
   stmtTimeoutMs: z.number().int().positive().max(600000).default(10000),
   requireTouchID: z.boolean().default(false),
+  maxBackupRows: z.number().int().positive().max(1_000_000).default(10000),
+  maxBackupBytes: z.number().int().positive().default(50 * 1024 * 1024),
+  onBackupOverflow: z.enum(['abort', 'truncate']).default('abort'),
 });
 
 export type Policy = z.infer<typeof PolicySchema>;
+
+export const PartialPolicySchema = PolicySchema.partial();
+export type PartialPolicy = z.infer<typeof PartialPolicySchema>;
 
 export const SshTunnelSchema = z.object({
   host: z.string().min(1),
@@ -38,14 +44,36 @@ export const ConnectionSchema = z.object({
   ssl: z.boolean().default(false),
   ssh: SshTunnelSchema.optional(),
   policy: PolicySchema,
+  databasePolicies: z.record(z.string().min(1).max(64), PartialPolicySchema).optional(),
 });
 
 export type Connection = z.infer<typeof ConnectionSchema>;
+
+export const RetentionConfigSchema = z.object({
+  auditDays: z.number().int().min(1).max(3650).default(90),
+  backupDays: z.number().int().min(1).max(3650).default(30),
+  auditMaxMB: z.number().int().min(10).max(100000).default(500),
+  backupMaxMB: z.number().int().min(10).max(100000).default(1000),
+  autoCleanupHours: z.number().int().min(0).max(720).default(24),
+  redactSqlInLog: z.boolean().default(false),
+  tamperEvidentChain: z.boolean().default(false),
+});
+
+export type RetentionConfig = z.infer<typeof RetentionConfigSchema>;
 
 export const ConfigSchema = z.object({
   version: z.literal(1).default(1),
   connections: z.array(ConnectionSchema).default([]),
   defaultConnection: z.string().optional(),
+  retention: RetentionConfigSchema.default({
+    auditDays: 90,
+    backupDays: 30,
+    auditMaxMB: 500,
+    backupMaxMB: 1000,
+    autoCleanupHours: 24,
+    redactSqlInLog: false,
+    tamperEvidentChain: false,
+  }),
 });
 
 export type Config = z.infer<typeof ConfigSchema>;
@@ -60,6 +88,9 @@ export const POLICY_PRESETS = {
     rowCap: 1000,
     stmtTimeoutMs: 10000,
     requireTouchID: false,
+    maxBackupRows: 10000,
+    maxBackupBytes: 50 * 1024 * 1024,
+    onBackupOverflow: 'abort',
   },
   dev: {
     read: 'allow',
@@ -70,6 +101,9 @@ export const POLICY_PRESETS = {
     rowCap: 5000,
     stmtTimeoutMs: 30000,
     requireTouchID: false,
+    maxBackupRows: 10000,
+    maxBackupBytes: 50 * 1024 * 1024,
+    onBackupOverflow: 'abort',
   },
   admin: {
     read: 'allow',
@@ -80,6 +114,9 @@ export const POLICY_PRESETS = {
     rowCap: 5000,
     stmtTimeoutMs: 60000,
     requireTouchID: true,
+    maxBackupRows: 10000,
+    maxBackupBytes: 50 * 1024 * 1024,
+    onBackupOverflow: 'abort',
   },
 } as const satisfies Record<string, Policy>;
 

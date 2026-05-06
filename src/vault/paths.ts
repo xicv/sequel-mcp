@@ -31,6 +31,17 @@ export function legacyConfigPath(): string {
   return path.join(legacyConfigDir(), 'config.json');
 }
 
+export function dataDir(): string {
+  const xdg = process.env.XDG_DATA_HOME;
+  return xdg
+    ? path.join(xdg, APP_NAME)
+    : path.join(os.homedir(), '.local', 'share', APP_NAME);
+}
+
+export function auditDbPath(): string {
+  return path.join(dataDir(), 'audit.sqlite');
+}
+
 export function keychainServiceName(connectionName: string): string {
   return `${KEYCHAIN_SERVICE_PREFIX} : ${connectionName}`;
 }

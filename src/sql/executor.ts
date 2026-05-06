@@ -2,6 +2,8 @@ import mysql, { type ConnectionOptions } from 'mysql2/promise';
 import type { Connection, Policy, SqlCategory } from '../types.js';
 import { openSshTunnel, type TunnelHandle } from './tunnel.js';
 import { injectMaxExecutionTime } from './hints.js';
+import { extractBackupSpec, isBackupRequired } from '../backup/extractor.js';
+import { captureBackup, BackupOverflowError } from '../backup/capture.js';
 
 export interface ExecuteParams {
   connection: Connection;
@@ -9,6 +11,7 @@ export interface ExecuteParams {
   sshPassword?: string;
   sql: string;
   category: SqlCategory;
+  astType?: string;
   policy: Policy;
   database?: string;
 }
@@ -19,6 +22,8 @@ export interface ExecuteResult {
   affectedRows: number;
   truncated: boolean;
   durationMs: number;
+  backupId?: number | null;
+  backupRowCount?: number;
 }
 
 const READ_ONLY_CATEGORIES: ReadonlySet<SqlCategory> = new Set(['read']);
@@ -87,6 +92,39 @@ export async function executeStatement(params: ExecuteParams): Promise<ExecuteRe
       }
     }
 
+    let backupId: number | null = null;
+    let backupRowCount = 0;
+    if (params.astType && isBackupRequired(params.astType) && conn) {
+      const spec = extractBackupSpec(params.sql, params.astType);
+      if (spec.kind !== 'none') {
+        try {
+          log(`${tag} capturing backup for ${params.astType}…`);
+          const captured = await captureBackup({
+            conn,
+            spec,
+            connectionName: params.connection.name,
+            database: params.database ?? params.connection.database,
+            policy: params.policy,
+          });
+          if (captured) {
+            backupId = captured.backupId;
+            backupRowCount = captured.totalRows;
+            log(
+              `${tag} backup #${backupId}: ${captured.totalRows} rows, ${captured.totalBytes}B${captured.truncated ? ' (truncated)' : ''}`,
+            );
+          }
+        } catch (e) {
+          if (e instanceof BackupOverflowError) {
+            log(`${tag} backup overflow: ${e.message}; aborting per policy`);
+            throw e;
+          }
+          log(`${tag} backup capture failed: ${(e as Error).message}; continuing without backup`);
+        }
+      } else if (spec.reason) {
+        log(`${tag} no backup taken: ${spec.reason}`);
+      }
+    }
+
     const sql =
       isRead && params.policy.stmtTimeoutMs > 0
         ? injectMaxExecutionTime(params.sql, params.policy.stmtTimeoutMs)
@@ -126,6 +164,8 @@ export async function executeStatement(params: ExecuteParams): Promise<ExecuteRe
       affectedRows,
       truncated,
       durationMs: Date.now() - start,
+      backupId,
+      backupRowCount,
     };
   } catch (e) {
     log(`${tag} FAILED at t=${Date.now() - start}ms: ${(e as Error).message}`);

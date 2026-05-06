@@ -5,8 +5,47 @@ const require = createRequire(import.meta.url);
 const { Parser } = require('node-sql-parser') as typeof import('node-sql-parser');
 
 export type ClassifierResult =
-  | { ok: true; category: SqlCategory; astType: string; statement: string }
+  | {
+      ok: true;
+      category: SqlCategory;
+      astType: string;
+      statement: string;
+      targetDatabases: string[];
+    }
   | { ok: false; error: string };
+
+interface TableRef {
+  op: string;
+  db: string | null;
+  table: string;
+}
+
+function parseTableList(sql: string): TableRef[] {
+  try {
+    const list = parser.tableList(sql, { database: 'mysql' });
+    if (!Array.isArray(list)) return [];
+    return list.flatMap((entry) => {
+      if (typeof entry !== 'string') return [];
+      const parts = entry.split('::');
+      if (parts.length < 3) return [];
+      const op = parts[0] ?? '';
+      const dbRaw = parts[1] ?? '';
+      const table = parts.slice(2).join('::');
+      return [{ op, db: dbRaw && dbRaw !== 'null' ? dbRaw : null, table }];
+    });
+  } catch {
+    return [];
+  }
+}
+
+export function extractTargetDatabases(sql: string): string[] {
+  const refs = parseTableList(sql);
+  const out = new Set<string>();
+  for (const r of refs) {
+    if (r.db) out.add(r.db);
+  }
+  return [...out].sort();
+}
 
 const READ_TYPES = new Set(['select', 'show', 'describe', 'desc', 'explain', 'pragma']);
 const WRITE_TYPES = new Set(['insert', 'update', 'delete', 'replace']);
@@ -119,12 +158,24 @@ export function classifyStatement(sql: string): ClassifierResult {
 
   const txCategory = classifyTxKeyword(stripped);
   if (txCategory) {
-    return { ok: true, category: txCategory, astType: 'transaction', statement: sql };
+    return {
+      ok: true,
+      category: txCategory,
+      astType: 'transaction',
+      statement: sql,
+      targetDatabases: [],
+    };
   }
 
   const adminCategory = classifyAdminKeyword(stripped);
   if (adminCategory) {
-    return { ok: true, category: adminCategory, astType: 'admin-keyword', statement: sql };
+    return {
+      ok: true,
+      category: adminCategory,
+      astType: 'admin-keyword',
+      statement: sql,
+      targetDatabases: extractTargetDatabases(sql),
+    };
   }
 
   let ast;
@@ -144,5 +195,11 @@ export function classifyStatement(sql: string): ClassifierResult {
     return { ok: false, error: `unknown statement type "${node.type}"` };
   }
 
-  return { ok: true, category, astType: node.type, statement: sql };
+  return {
+    ok: true,
+    category,
+    astType: node.type,
+    statement: sql,
+    targetDatabases: extractTargetDatabases(sql),
+  };
 }

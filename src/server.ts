@@ -1,10 +1,13 @@
+import { randomUUID } from 'node:crypto';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js';
 import { z } from 'zod';
 import {
   ConnectionSchema,
   POLICY_PRESETS,
+  PartialPolicySchema,
   PolicySchema,
+  RetentionConfigSchema,
   PolicyConfirmationDeclinedError,
   PolicyDeniedError,
   type Connection,
@@ -12,6 +15,12 @@ import {
 } from './types.js';
 import { classifyStatement } from './policy/classifier.js';
 import { evaluatePolicy } from './policy/gate.js';
+import { resolveEffectivePolicy } from './policy/resolver.js';
+import { writeAuditEntry, searchAuditLog } from './audit/logger.js';
+import { cleanupAudit, maybeAutoCleanup } from './audit/retention.js';
+import { listBackups, getBackup } from './backup/capture.js';
+import { planRestore, executeRestore } from './backup/restore.js';
+import mysql from 'mysql2/promise';
 import {
   getConnection,
   getDefaultConnectionName,
@@ -19,6 +28,7 @@ import {
   policyFromPreset,
   removeConnectionByName,
   resolveConnection,
+  saveConfig,
   setDefaultConnection,
   upsertConnection,
 } from './vault/config.js';
@@ -29,7 +39,7 @@ import { importFromSequelAce } from './importer/sequelAcePlist.js';
 import { makeConfirmFn } from './elicit/confirm.js';
 
 const PACKAGE_NAME = 'sequel-mcp';
-const PACKAGE_VERSION = '0.1.0';
+const PACKAGE_VERSION = '0.2.0';
 
 function toolError(text: string): CallToolResult {
   return { isError: true, content: [{ type: 'text', text }] };
@@ -83,6 +93,10 @@ export function buildServer(opts: AppOptions = {}): McpServer {
   void getTouchID().then((tid) => {
     Object.assign(auth, new SessionAuthenticator(tid));
   });
+
+  void loadConfig()
+    .then((cfg) => maybeAutoCleanup(cfg.retention))
+    .catch(() => undefined);
 
   registerTools(mcp, { secretStore, confirmFn, auth });
   registerPrompts(mcp);
@@ -502,6 +516,256 @@ function registerTools(mcp: McpServer, deps: ToolDeps): void {
       return jsonResult(result);
     },
   );
+
+  mcp.registerTool(
+    'set_database_policy',
+    {
+      title: 'Set per-database policy override',
+      description:
+        'Override the connection policy for a specific database. Per-DB override takes precedence over the connection baseline. When a single statement touches multiple DBs, the strictest action wins.',
+      annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false },
+      inputSchema: {
+        connection: z.string().min(1).optional(),
+        database: z.string().min(1).max(64),
+        policy: z.object({
+          read: z.enum(['allow', 'confirm', 'deny']).optional(),
+          write: z.enum(['allow', 'confirm', 'deny']).optional(),
+          ddl: z.enum(['allow', 'confirm', 'deny']).optional(),
+          admin: z.enum(['allow', 'confirm', 'deny']).optional(),
+          txCtrl: z.enum(['allow', 'confirm', 'deny']).optional(),
+          rowCap: z.number().int().positive().optional(),
+          stmtTimeoutMs: z.number().int().positive().optional(),
+          maxBackupRows: z.number().int().positive().optional(),
+          maxBackupBytes: z.number().int().positive().optional(),
+          onBackupOverflow: z.enum(['abort', 'truncate']).optional(),
+          requireTouchID: z.boolean().optional(),
+        }),
+      },
+    },
+    async (args) => {
+      const conn = await resolveConnection(args.connection);
+      if (!conn) return toolError(noConnectionMessage(args.connection));
+      const partial = PartialPolicySchema.parse(args.policy);
+      const next: Connection = {
+        ...conn,
+        databasePolicies: { ...(conn.databasePolicies ?? {}), [args.database]: partial },
+      };
+      await upsertConnection(next);
+      return jsonResult({
+        connection: conn.name,
+        database: args.database,
+        policy: partial,
+      });
+    },
+  );
+
+  mcp.registerTool(
+    'clear_database_policy',
+    {
+      title: 'Clear per-database policy override',
+      description: 'Remove the override for a specific database; the connection baseline cascades again.',
+      annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false },
+      inputSchema: { connection: z.string().min(1).optional(), database: z.string().min(1) },
+    },
+    async (args) => {
+      const conn = await resolveConnection(args.connection);
+      if (!conn) return toolError(noConnectionMessage(args.connection));
+      if (!conn.databasePolicies?.[args.database]) {
+        return textResult(`No override exists for ${conn.name}/${args.database}.`);
+      }
+      const remaining = { ...conn.databasePolicies };
+      delete remaining[args.database];
+      const next: Connection = {
+        ...conn,
+        databasePolicies: Object.keys(remaining).length > 0 ? remaining : undefined,
+      };
+      await upsertConnection(next);
+      return textResult(`Cleared override for ${conn.name}/${args.database}.`);
+    },
+  );
+
+  mcp.registerTool(
+    'list_database_policies',
+    {
+      title: 'List per-database policy overrides',
+      description: 'Show baseline + every per-DB override for a connection.',
+      annotations: { readOnlyHint: true, idempotentHint: true, openWorldHint: false },
+      inputSchema: { connection: z.string().min(1).optional() },
+    },
+    async (args) => {
+      const conn = await resolveConnection(args.connection);
+      if (!conn) return toolError(noConnectionMessage(args.connection));
+      return jsonResult({
+        connection: conn.name,
+        baseline: conn.policy,
+        overrides: conn.databasePolicies ?? {},
+      });
+    },
+  );
+
+  mcp.registerTool(
+    'audit_search',
+    {
+      title: 'Search audit log',
+      description:
+        'Query the local audit-log SQLite. Returns redacted SQL by default. Includes connection, decision, outcome, duration, and backup_id.',
+      annotations: { readOnlyHint: true, idempotentHint: true, openWorldHint: false },
+      inputSchema: {
+        connection: z.string().optional(),
+        category: z.enum(['read', 'write', 'ddl', 'admin', 'txCtrl']).optional(),
+        outcome: z.enum(['success', 'error', 'denied', 'declined']).optional(),
+        sinceIso: z.string().optional(),
+        untilIso: z.string().optional(),
+        limit: z.number().int().min(1).max(5000).default(200),
+      },
+    },
+    async (args) => {
+      const rows = searchAuditLog({
+        connection: args.connection,
+        category: args.category,
+        outcome: args.outcome,
+        since: args.sinceIso ? new Date(args.sinceIso) : undefined,
+        until: args.untilIso ? new Date(args.untilIso) : undefined,
+        limit: args.limit,
+      });
+      return jsonResult({ count: rows.length, rows });
+    },
+  );
+
+  mcp.registerTool(
+    'audit_cleanup',
+    {
+      title: 'Clean up audit log + old backups',
+      description:
+        'Prune audit entries older than retention.auditDays and backups older than retention.backupDays. Hard size caps trigger an additional 20% trim. VACUUMs the file. Pass dryRun=true to preview.',
+      annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: true, openWorldHint: false },
+      inputSchema: { dryRun: z.boolean().default(false) },
+    },
+    async (args) => {
+      const cfg = await loadConfig();
+      const r = cleanupAudit(cfg.retention, { dryRun: args.dryRun });
+      return jsonResult(r);
+    },
+  );
+
+  mcp.registerTool(
+    'set_retention',
+    {
+      title: 'Update retention / cleanup config',
+      description:
+        'Configure how long audit entries and backups are kept, hard size caps, and how often auto-cleanup runs on server boot.',
+      annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false },
+      inputSchema: {
+        auditDays: z.number().int().min(1).max(3650).optional(),
+        backupDays: z.number().int().min(1).max(3650).optional(),
+        auditMaxMB: z.number().int().min(10).max(100000).optional(),
+        backupMaxMB: z.number().int().min(10).max(100000).optional(),
+        autoCleanupHours: z.number().int().min(0).max(720).optional(),
+        redactSqlInLog: z.boolean().optional(),
+        tamperEvidentChain: z.boolean().optional(),
+      },
+    },
+    async (args) => {
+      const cfg = await loadConfig();
+      const next = RetentionConfigSchema.parse({ ...cfg.retention, ...args });
+      await saveConfig({ ...cfg, retention: next });
+      return jsonResult(next);
+    },
+  );
+
+  mcp.registerTool(
+    'list_backups',
+    {
+      title: 'List recent row/schema backups',
+      description: 'Show recent pre-mutation backups taken before UPDATE/DELETE/TRUNCATE/DROP/ALTER. Each row links to a backup_id.',
+      annotations: { readOnlyHint: true, idempotentHint: true, openWorldHint: false },
+      inputSchema: { connection: z.string().optional(), limit: z.number().int().min(1).max(1000).default(50) },
+    },
+    async (args) => {
+      const rows = listBackups({ connection: args.connection, limit: args.limit });
+      return jsonResult({ count: rows.length, rows });
+    },
+  );
+
+  mcp.registerTool(
+    'restore_backup',
+    {
+      title: 'Restore from a pre-mutation backup',
+      description:
+        'Replay backup #N into the originating connection. Generates INSERT … ON DUPLICATE KEY UPDATE for row backups, CREATE TABLE for schema backups. Subject to the same policy gate (counts as a write). Pass dryRun=true to inspect the plan first.',
+      annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: false },
+      inputSchema: {
+        backupId: z.number().int().positive(),
+        dryRun: z.boolean().default(true),
+      },
+    },
+    async (args) => {
+      const backup = getBackup(args.backupId);
+      if (!backup) return toolError(`Backup #${args.backupId} not found.`);
+
+      const conn = await getConnection(backup.connection);
+      if (!conn) return toolError(`Connection "${backup.connection}" referenced by backup no longer exists.`);
+
+      let plan;
+      try {
+        plan = planRestore(args.backupId);
+      } catch (e) {
+        return toolError(`Cannot plan restore: ${(e as Error).message}`);
+      }
+
+      if (args.dryRun) {
+        return jsonResult({
+          backupId: args.backupId,
+          connection: backup.connection,
+          rowCount: plan.rowCount,
+          statementCount: plan.statements.length,
+          warnings: plan.warnings,
+          firstStatementPreview: plan.statements[0]?.slice(0, 240) ?? null,
+          note: 'dry-run; pass dryRun=false to actually execute',
+        });
+      }
+
+      const ok = await deps.confirmFn({
+        category: 'write',
+        statement: `RESTORE backup #${args.backupId}: ${plan.statements.length} statement(s) into ${backup.connection}.${backup.database ?? '<default>'}.${backup.table_name}`,
+        connectionName: backup.connection,
+      });
+      if (!ok) return toolError('Restore declined.');
+
+      const creds = await loadCredentials({ store: deps.secretStore, connection: conn });
+      if (!creds) return toolError(`No password for "${backup.connection}".`);
+
+      let mysqlConn: mysql.Connection | null = null;
+      try {
+        mysqlConn = await mysql.createConnection({
+          host: conn.host,
+          port: conn.port,
+          user: conn.user,
+          password: creds.password,
+          database: backup.database ?? conn.database,
+          multipleStatements: false,
+          connectTimeout: 15000,
+        });
+        await mysqlConn.query('START TRANSACTION READ WRITE');
+        const r = await executeRestore({ conn: mysqlConn, plan });
+        await mysqlConn.query('COMMIT');
+        return jsonResult({ backupId: args.backupId, ...r, warnings: plan.warnings });
+      } catch (e) {
+        try {
+          await mysqlConn?.query('ROLLBACK');
+        } catch {
+          /* ignore */
+        }
+        return toolError(`Restore failed: ${(e as Error).message}`);
+      } finally {
+        try {
+          await mysqlConn?.end();
+        } catch {
+          /* ignore */
+        }
+      }
+    },
+  );
 }
 
 function noConnectionMessage(explicit: string | undefined): string {
@@ -530,26 +794,63 @@ async function runSqlTool(params: {
     );
   }
 
-  if (conn.policy.requireTouchID) {
+  const cfg = await loadConfig();
+  const retention = cfg.retention;
+
+  const resolved = resolveEffectivePolicy({
+    connection: conn,
+    category: classified.category,
+    targetDatabases: classified.targetDatabases,
+    fallbackDatabase: args.database,
+  });
+
+  if (resolved.effective.requireTouchID) {
     const ok = await auth.ensureAuthenticated(
       `Authenticate to run ${classified.category} on ${conn.name}`,
     );
     if (!ok) return toolError('Touch ID authentication failed.');
   }
 
+  const requestId = randomUUID();
+  const databasesForLog =
+    classified.targetDatabases.length > 0
+      ? classified.targetDatabases
+      : args.database
+        ? [args.database]
+        : conn.database
+          ? [conn.database]
+          : [];
+
   try {
     await evaluatePolicy({
-      policy: conn.policy,
+      policy: resolved.effective,
       category: classified.category,
       statement: args.sql,
       connectionName: conn.name,
       elicitConfirm: confirmFn,
     });
   } catch (e) {
-    if (e instanceof PolicyDeniedError) {
-      return toolError(`Denied by policy: ${classified.category} statements not allowed on "${conn.name}".`);
-    }
-    if (e instanceof PolicyConfirmationDeclinedError) {
+    const declined = e instanceof PolicyConfirmationDeclinedError;
+    const denied = e instanceof PolicyDeniedError;
+    if (declined || denied) {
+      writeAuditEntry(
+        {
+          requestId,
+          connection: conn.name,
+          databases: databasesForLog,
+          category: classified.category,
+          astType: classified.astType,
+          sql: args.sql,
+          decision: denied ? 'deny' : 'confirm',
+          confirmed: false,
+          outcome: denied ? 'denied' : 'declined',
+        },
+        { redactSqlInLog: retention.redactSqlInLog, tamperEvidentChain: retention.tamperEvidentChain },
+      );
+      if (denied) {
+        const dbHint = resolved.contributingDatabase ? ` (${resolved.contributingDatabase})` : '';
+        return toolError(`Denied by policy: ${classified.category} statements not allowed on "${conn.name}"${dbHint}.`);
+      }
       return toolError('User declined confirmation. Statement not executed.');
     }
     throw e;
@@ -569,20 +870,58 @@ async function runSqlTool(params: {
       sshPassword: creds.sshPassword,
       sql: args.sql,
       category: classified.category,
-      policy: conn.policy,
+      astType: classified.astType,
+      policy: resolved.effective,
       database: args.database,
     });
+    writeAuditEntry(
+      {
+        requestId,
+        connection: conn.name,
+        databases: databasesForLog,
+        category: classified.category,
+        astType: classified.astType,
+        sql: args.sql,
+        decision: resolved.action,
+        confirmed: resolved.action === 'confirm',
+        outcome: 'success',
+        affectedRows: result.affectedRows ?? null,
+        durationMs: result.durationMs,
+        backupId: result.backupId ?? null,
+      },
+      { redactSqlInLog: retention.redactSqlInLog, tamperEvidentChain: retention.tamperEvidentChain },
+    );
     return jsonResult({
       connection: conn.name,
       category: classified.category,
+      contributingDatabase: resolved.contributingDatabase,
+      contributingDatabases: resolved.contributingDatabases,
       rows: result.rows,
       fields: result.fields,
       affectedRows: result.affectedRows,
       truncated: result.truncated,
-      rowCap: conn.policy.rowCap,
+      rowCap: resolved.effective.rowCap,
       durationMs: result.durationMs,
+      backupId: result.backupId ?? null,
+      backupRowCount: result.backupRowCount ?? 0,
+      requestId,
     });
   } catch (e) {
+    writeAuditEntry(
+      {
+        requestId,
+        connection: conn.name,
+        databases: databasesForLog,
+        category: classified.category,
+        astType: classified.astType,
+        sql: args.sql,
+        decision: resolved.action,
+        confirmed: resolved.action === 'confirm',
+        outcome: 'error',
+        error: (e as Error).message,
+      },
+      { redactSqlInLog: retention.redactSqlInLog, tamperEvidentChain: retention.tamperEvidentChain },
+    );
     return toolError(`SQL execution failed: ${(e as Error).message}`);
   }
 }

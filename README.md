@@ -146,6 +146,64 @@ Tweak via the `set_policy` tool — no need to edit JSON.
 | `select_database`          | -                        | Set a connection's default database (no password needed). |
 | `import_from_sequel_ace`   | -                        | One-time import from Sequel Ace's `Favorites.plist` + Keychain. |
 | `doctor`                   | readOnly                 | Sanitized JSON diagnostic: runtime, paths, connections, policy, password presence. **No secrets.** |
+| `set_database_policy`      | -                        | Override the connection policy for a specific database. Per-DB takes precedence over baseline. |
+| `clear_database_policy`    | -                        | Remove a per-DB override; baseline cascades again. |
+| `list_database_policies`   | readOnly                 | Show baseline + every override for a connection. |
+| `audit_search`             | readOnly                 | Query the local audit log SQLite. |
+| `audit_cleanup`            | destructive              | Prune entries older than retention. Pass `dryRun=true` to preview. |
+| `set_retention`            | -                        | Configure retention windows + size caps. |
+| `list_backups`             | readOnly                 | Show recent pre-mutation backups. |
+| `restore_backup`           | destructive              | Replay a backup back into MySQL. Subject to policy gate. Default `dryRun=true`. |
+
+## Two-layer permissions (v0.2.0)
+
+Every connection has a **baseline policy** that cascades to all databases. You can override the policy **per database** so that a single statement touching multiple DBs is judged at the strictest level.
+
+```text
+"set baseline on acme-prod to read-only"        → all DBs read-only
+"on acme-prod set policy for staging to write=confirm"
+"list_database_policies for acme-prod"          → shows baseline + override
+```
+
+When a single SQL statement touches multiple databases, **the strictest action wins** (Apache Ranger semantics, fail closed):
+
+| db1 policy | db2 policy | resolved |
+|---|---|---|
+| allow | confirm | confirm |
+| allow | deny | deny |
+| confirm | confirm | confirm |
+
+Resolved decision is recorded in the audit log along with the contributing database.
+
+## Audit log + pre-mutation backup (v0.2.0)
+
+Every tool call writes one row to `~/.local/share/sequel-mcp/audit.sqlite`. Each row contains: timestamp, request UUID, connection, target databases (JSON), category, AST type, redacted SQL (literals → placeholders), policy decision, confirmed bool, outcome (`success`/`error`/`denied`/`declined`), affected_rows, duration_ms, error message, backup_id.
+
+Before every `UPDATE`/`DELETE`/`TRUNCATE`/`DROP TABLE`/`ALTER`/`RENAME`, the executor runs a `SELECT … FOR UPDATE` (for row backups) or `SHOW CREATE TABLE` (for schema backups) inside the same MySQL transaction. Rows are stored as JSON in the SQLite `backup` table. Caps: `maxBackupRows=10000`, `maxBackupBytes=50MB`. Default behavior on overflow: **abort** the statement.
+
+To restore:
+
+```text
+"list_backups for acme-prod"
+"restore_backup id=42 dry-run"      → shows the plan, no execution
+"restore_backup id=42"               → re-executes; goes through the policy gate
+```
+
+## Retention / cleanup
+
+Defaults (configurable via `set_retention`):
+
+| Setting | Default | Range |
+|---|---|---|
+| `auditDays` | 90 | 1-3650 |
+| `backupDays` | 30 | 1-3650 |
+| `auditMaxMB` | 500 | 10-100000 |
+| `backupMaxMB` | 1000 | 10-100000 |
+| `autoCleanupHours` | 24 | 0 disables |
+| `redactSqlInLog` | false | true to drop raw SQL too |
+| `tamperEvidentChain` | false | SHA-256 row chain |
+
+Auto-cleanup runs lazily on server boot if last cleanup > `autoCleanupHours` ago. Manual: `audit_cleanup` tool or `npm run audit:cleanup`.
 
 ## Default connection / database
 
