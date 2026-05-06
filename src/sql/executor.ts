@@ -3,7 +3,7 @@ import type { Connection, Policy, SqlCategory } from '../types.js';
 import { openSshTunnel, type TunnelHandle } from './tunnel.js';
 import { injectMaxExecutionTime } from './hints.js';
 import { extractBackupSpec, isBackupRequired } from '../backup/extractor.js';
-import { captureBackup, BackupOverflowError } from '../backup/capture.js';
+import { captureBackup, captureInsertHint, BackupOverflowError } from '../backup/capture.js';
 
 export interface ExecuteParams {
   connection: Connection;
@@ -94,9 +94,13 @@ export async function executeStatement(params: ExecuteParams): Promise<ExecuteRe
 
     let backupId: number | null = null;
     let backupRowCount = 0;
+    let pendingInsertSpec: ReturnType<typeof extractBackupSpec> | null = null;
     if (params.astType && isBackupRequired(params.astType) && conn) {
       const spec = extractBackupSpec(params.sql, params.astType);
-      if (spec.kind !== 'none') {
+      if (spec.kind === 'insert-hint') {
+        pendingInsertSpec = spec;
+        log(`${tag} INSERT detected; will capture rollback hint after execution`);
+      } else if (spec.kind !== 'none') {
         try {
           log(`${tag} capturing backup for ${params.astType}…`);
           const captured = await captureBackup({
@@ -148,6 +152,28 @@ export async function executeStatement(params: ExecuteParams): Promise<ExecuteRe
       }
     } else if (rowsRaw && typeof rowsRaw === 'object' && 'affectedRows' in rowsRaw) {
       affectedRows = Number((rowsRaw as { affectedRows: number }).affectedRows ?? 0);
+    }
+
+    if (pendingInsertSpec) {
+      const insertId =
+        rowsRaw && typeof rowsRaw === 'object' && 'insertId' in rowsRaw
+          ? Number((rowsRaw as { insertId: number }).insertId ?? 0)
+          : null;
+      try {
+        const id = captureInsertHint({
+          spec: pendingInsertSpec,
+          connectionName: params.connection.name,
+          database: params.database ?? params.connection.database,
+          result: { insertId, affectedRows },
+        });
+        if (id) {
+          backupId = id;
+          backupRowCount = affectedRows;
+          log(`${tag} insert-hint backup #${id}: ${affectedRows} row(s)`);
+        }
+      } catch (e) {
+        log(`${tag} insert-hint capture failed: ${(e as Error).message}`);
+      }
     }
 
     const fields = Array.isArray(fieldsRaw)

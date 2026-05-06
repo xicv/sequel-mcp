@@ -47,6 +47,30 @@ export function planRestore(backupId: number, opts?: { pathOverride?: string }):
     if (backup.schema_sql) statements.push(backup.schema_sql + ';');
   }
 
+  if (backup.backup_kind === 'insert-hint') {
+    if (!backup.primary_key) {
+      warnings.push('insert-hint backup has no recoverable PK metadata; nothing to restore');
+      return { backupId, statements, rowCount: 0, warnings };
+    }
+    const meta = JSON.parse(backup.primary_key) as
+      | { kind: 'range'; column: string; start: number; end: number }
+      | { kind: 'explicit'; columns: string[]; values: unknown[][] };
+    const tref = tableRefSql(backup.database, backup.table_name);
+    if (meta.kind === 'range') {
+      statements.push(
+        `DELETE FROM ${tref} WHERE ${quoteId(meta.column)} BETWEEN ${meta.start} AND ${meta.end};`,
+      );
+    } else {
+      const colExpr = meta.columns.map(quoteId).join(', ');
+      const valueRows = meta.values
+        .map((row) => `(${row.map((v) => escapeValue(v)).join(', ')})`)
+        .join(', ');
+      statements.push(`DELETE FROM ${tref} WHERE (${colExpr}) IN (${valueRows});`);
+    }
+    warnings.push('insert-hint restore deletes the rows the INSERT created — verify before running');
+    return { backupId, statements, rowCount: backup.row_count, warnings };
+  }
+
   if (backup.rows && Array.isArray(backup.rows) && backup.rows.length > 0) {
     const tref = tableRefSql(backup.database, backup.table_name);
     const sample = backup.rows[0] as Record<string, unknown>;

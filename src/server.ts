@@ -37,6 +37,7 @@ import { SessionAuthenticator, getTouchID } from './vault/touchid.js';
 import { executeStatement } from './sql/executor.js';
 import { importFromSequelAce } from './importer/sequelAcePlist.js';
 import { readSequelAceHistory, statSequelAceHistory } from './importer/sequelAceHistory.js';
+import { searchUnifiedHistory } from './audit/history-search.js';
 import { makeConfirmFn } from './elicit/confirm.js';
 
 const PACKAGE_NAME = 'sequel-mcp';
@@ -523,6 +524,35 @@ function registerTools(mcp: McpServer, deps: ToolDeps): void {
         secretStore: deps.secretStore,
       });
       return jsonResult(result);
+    },
+  );
+
+  mcp.registerTool(
+    'history_search',
+    {
+      title: 'Unified history (MCP audit + Sequel Ace)',
+      description:
+        'Merge our audit_log with Sequel Ace queryHistory.db, sorted by timestamp DESC. Each row has a source field (mcp | sequel-ace). Use source=mcp or source=sequel-ace to filter to one. Useful when you want a single timeline regardless of where a query was run.',
+      annotations: { readOnlyHint: true, idempotentHint: true, openWorldHint: false },
+      inputSchema: {
+        sinceIso: z.string().optional(),
+        untilIso: z.string().optional(),
+        search: z.string().optional(),
+        connection: z.string().optional(),
+        source: z.enum(['mcp', 'sequel-ace', 'both']).default('both'),
+        limit: z.number().int().min(1).max(5000).default(200),
+      },
+    },
+    async (args) => {
+      const rows = searchUnifiedHistory({
+        sinceIso: args.sinceIso,
+        untilIso: args.untilIso,
+        search: args.search,
+        connection: args.connection,
+        source: args.source,
+        limit: args.limit,
+      });
+      return jsonResult({ count: rows.length, rows });
     },
   );
 

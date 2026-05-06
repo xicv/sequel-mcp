@@ -60,6 +60,7 @@ export async function captureBackup(args: {
   pathOverride?: string;
 }): Promise<CapturedBackup | null> {
   if (args.spec.kind === 'none') return null;
+  if (args.spec.kind === 'insert-hint') return null;
 
   const db = openAuditDb({ pathOverride: args.pathOverride });
   const ts = new Date().toISOString();
@@ -78,10 +79,7 @@ export async function captureBackup(args: {
   let truncatedAny = false;
   let firstId: number | null = null;
 
-  const tables =
-    args.spec.kind === 'rows' || args.spec.kind === 'combined'
-      ? args.spec.tables
-      : args.spec.tables;
+  const tables = args.spec.tables;
 
   for (const t of tables) {
     let rowsJson: string | null = null;
@@ -138,6 +136,66 @@ export async function captureBackup(args: {
   return { backupId: firstId, totalRows, totalBytes, truncated: truncatedAny, perTable };
 }
 
+export interface InsertResult {
+  insertId: number | null;
+  affectedRows: number;
+}
+
+export function captureInsertHint(args: {
+  spec: BackupSpec;
+  connectionName: string;
+  database: string | undefined;
+  result: InsertResult;
+  pathOverride?: string;
+}): number | null {
+  if (args.spec.kind !== 'insert-hint') return null;
+  const { table, columns, explicitPkValues } = args.spec;
+  const db = openAuditDb({ pathOverride: args.pathOverride });
+  const ts = new Date().toISOString();
+
+  let primaryKey: string | null = null;
+  let rowsJson: string | null = null;
+  let rowCount = args.result.affectedRows;
+
+  if (explicitPkValues && explicitPkValues.length > 0) {
+    primaryKey = JSON.stringify({ kind: 'explicit', columns: ['id'], values: explicitPkValues });
+    rowsJson = JSON.stringify(explicitPkValues);
+  } else if (
+    typeof args.result.insertId === 'number' &&
+    args.result.insertId > 0 &&
+    args.result.affectedRows > 0
+  ) {
+    const start = args.result.insertId;
+    const end = start + args.result.affectedRows - 1;
+    primaryKey = JSON.stringify({ kind: 'range', column: 'id', start, end });
+    rowCount = args.result.affectedRows;
+  } else {
+    return null;
+  }
+
+  const ins = db
+    .prepare(
+      `INSERT INTO backup
+         (ts, connection, database, table_name, backup_kind, rows_json, schema_sql, primary_key, row_count, truncated, size_bytes)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    )
+    .run(
+      ts,
+      args.connectionName,
+      args.database ?? table.db ?? null,
+      table.table,
+      'insert-hint',
+      rowsJson,
+      null,
+      primaryKey,
+      rowCount,
+      0,
+      rowsJson ? Buffer.byteLength(rowsJson, 'utf8') : 0,
+    );
+  void columns;
+  return Number(ins.lastInsertRowid);
+}
+
 export interface BackupRow {
   id: number;
   ts: string;
@@ -182,13 +240,14 @@ export function listBackups(filters: { connection?: string; limit?: number }, op
 export interface BackupDetail extends BackupRow {
   rows: unknown[] | null;
   schema_sql: string | null;
+  primary_key: string | null;
 }
 
 export function getBackup(id: number, opts?: { pathOverride?: string }): BackupDetail | null {
   const db = openAuditDb({ pathOverride: opts?.pathOverride });
   const r = db
     .prepare(
-      `SELECT id, ts, connection, database, table_name, backup_kind, rows_json, schema_sql, row_count, truncated, size_bytes
+      `SELECT id, ts, connection, database, table_name, backup_kind, rows_json, schema_sql, primary_key, row_count, truncated, size_bytes
        FROM backup WHERE id = ?`,
     )
     .get(id) as Record<string, unknown> | undefined;
@@ -205,5 +264,6 @@ export function getBackup(id: number, opts?: { pathOverride?: string }): BackupD
     size_bytes: Number(r.size_bytes),
     rows: r.rows_json == null ? null : (JSON.parse(String(r.rows_json)) as unknown[]),
     schema_sql: r.schema_sql == null ? null : String(r.schema_sql),
+    primary_key: r.primary_key == null ? null : String(r.primary_key),
   };
 }

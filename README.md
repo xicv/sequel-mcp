@@ -222,6 +222,32 @@ Backup retention is a single window (default 30 days) — pre-mutation rollback 
 
 Legacy `auditDays` is still accepted on input (one-shot migrate to uniform per-category) for backward compat with v0.2 configs.
 
+### Multi-table mutations (v0.4.0)
+
+Multi-table `UPDATE … JOIN …` and `DELETE a, b FROM a JOIN b …` now produce **one backup per mutated table**. The extractor inspects the `SET` clause to identify which tables are actually written. Each backup is a separate row in the `backup` table; `restore_backup` replays them.
+
+### REPLACE PK rollback (v0.4.0)
+
+`REPLACE INTO t (id, …) VALUES (…)` triggers a `SELECT * FROM t WHERE id IN (…)` against pre-existing PKs before the replace runs. If the conflict-row existed, it's restorable.
+
+### INSERT auto-rollback hint (v0.4.0)
+
+After an `INSERT` runs, the executor records:
+- For auto-increment tables: `{kind: 'range', column: 'id', start, end}` based on `mysql.insertId` + `affectedRows`. Restore = `DELETE FROM t WHERE id BETWEEN start AND end`.
+- For explicit-id INSERTs: stores the literal PK list. Restore = `DELETE FROM t WHERE (id) IN (...)`.
+
+INSERT-hint backups are no-cost pre-mutation (post-execution capture only). Visible in `list_backups` like any other.
+
+### Unified history search (v0.4.0)
+
+```text
+"Show me everything I've run on acme-prod in the last 24 hours."
+→ history_search({sinceIso: '...', connection: 'acme-prod'})
+   merges audit_log + Sequel Ace queryHistory.db, sorted DESC, source field per row.
+```
+
+Useful when you forget which tool you used. Filter to one source via `source=mcp` or `source=sequel-ace`.
+
 ### Sequel Ace history (v0.3.0)
 
 If you also use Sequel Ace's GUI, you can read its query history (deduplicated by query text, latest createdTime per distinct query):
