@@ -193,15 +193,45 @@ To restore:
 
 Defaults (configurable via `set_retention`):
 
+### Per-category retention (v0.3.0)
+
+| Category | Default days | Why |
+|---|---|---|
+| `read` | **7** | Voluminous, ephemeral — drop fast |
+| `write` | **30** | Useful for "what changed last month" |
+| `ddl` | **90** | Schema changes are rare + critical |
+| `admin` | **180** | Privilege ops — long retention |
+| `txCtrl` | **7** | Low signal |
+
+Backup retention is a single window (default 30 days) — pre-mutation rollback rarely useful past a month.
+
 | Setting | Default | Range |
 |---|---|---|
-| `auditDays` | 90 | 1-3650 |
+| `retentionDaysByCategory.{read,write,ddl,admin,txCtrl}` | 7/30/90/180/7 | 1-3650 each |
 | `backupDays` | 30 | 1-3650 |
 | `auditMaxMB` | 500 | 10-100000 |
 | `backupMaxMB` | 1000 | 10-100000 |
 | `autoCleanupHours` | 24 | 0 disables |
 | `redactSqlInLog` | false | true to drop raw SQL too |
 | `tamperEvidentChain` | false | SHA-256 row chain |
+
+```text
+"Set retention: keep reads 3 days, writes 14 days."
+→ set_retention({retentionDaysByCategory: {read: 3, write: 14}})
+```
+
+Legacy `auditDays` is still accepted on input (one-shot migrate to uniform per-category) for backward compat with v0.2 configs.
+
+### Sequel Ace history (v0.3.0)
+
+If you also use Sequel Ace's GUI, you can read its query history (deduplicated by query text, latest createdTime per distinct query):
+
+```text
+"Show my Sequel Ace history from the last 7 days containing 'users'."
+→ sequel_ace_history({sinceIso, search: 'users'})
+```
+
+Path: `~/Library/Containers/com.sequel-ace.sequel-ace/.../Data/queryHistory.db`. Opened **read-only**; doesn't lock or affect Sequel Ace running concurrently. Limitations vs our audit log: no connection name, no per-execution timestamps (only latest), no outcome/affected_rows. Useful as a search surface ("did I ever run a query like that?"), not as an audit substitute.
 
 Auto-cleanup runs lazily on server boot if last cleanup > `autoCleanupHours` ago. Manual: `audit_cleanup` tool or `npm run audit:cleanup`.
 

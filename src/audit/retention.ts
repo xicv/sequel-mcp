@@ -1,8 +1,9 @@
 import { openAuditDb } from './db.js';
-import type { RetentionConfig } from '../types.js';
+import type { RetentionConfig, SqlCategory } from '../types.js';
 
 export interface CleanupResult {
   auditDeleted: number;
+  auditDeletedByCategory: Record<SqlCategory, number>;
   backupDeleted: number;
   bytesReclaimed: number;
   ranAt: string;
@@ -26,22 +27,42 @@ function setMeta(db: ReturnType<typeof openAuditDb>, key: string, value: string)
   ).run(key, value);
 }
 
+const CATEGORIES: SqlCategory[] = ['read', 'write', 'ddl', 'admin', 'txCtrl'];
+
+function dayCutoff(days: number): string {
+  return new Date(Date.now() - days * 24 * 60 * 60 * 1000).toISOString();
+}
+
 export function cleanupAudit(config: RetentionConfig, opts?: { pathOverride?: string; dryRun?: boolean }): CleanupResult {
   const db = openAuditDb({ pathOverride: opts?.pathOverride });
   const ranAt = new Date().toISOString();
   const beforeBytes = pageBytes(db);
 
-  const auditCutoff = new Date(Date.now() - config.auditDays * 24 * 60 * 60 * 1000).toISOString();
-  const backupCutoff = new Date(Date.now() - config.backupDays * 24 * 60 * 60 * 1000).toISOString();
+  const cutoffsByCategory = Object.fromEntries(
+    CATEGORIES.map((c) => [c, dayCutoff(config.retentionDaysByCategory[c])]),
+  ) as Record<SqlCategory, string>;
+  const backupCutoff = dayCutoff(config.backupDays);
 
+  const auditDeletedByCategory: Record<SqlCategory, number> = {
+    read: 0,
+    write: 0,
+    ddl: 0,
+    admin: 0,
+    txCtrl: 0,
+  };
   let auditDeleted = 0;
   let backupDeleted = 0;
 
   if (!opts?.dryRun) {
     const txn = db.transaction(() => {
-      const a = db.prepare('DELETE FROM audit_log WHERE ts < ?').run(auditCutoff);
+      for (const cat of CATEGORIES) {
+        const r = db
+          .prepare('DELETE FROM audit_log WHERE category = ? AND ts < ?')
+          .run(cat, cutoffsByCategory[cat]);
+        auditDeletedByCategory[cat] = Number(r.changes);
+        auditDeleted += Number(r.changes);
+      }
       const b = db.prepare('DELETE FROM backup WHERE ts < ?').run(backupCutoff);
-      auditDeleted = Number(a.changes);
       backupDeleted = Number(b.changes);
 
       const auditMaxBytes = config.auditMaxMB * 1024 * 1024;
@@ -73,15 +94,21 @@ export function cleanupAudit(config: RetentionConfig, opts?: { pathOverride?: st
     txn();
     db.exec('VACUUM');
   } else {
-    const a = db.prepare('SELECT COUNT(*) as c FROM audit_log WHERE ts < ?').get(auditCutoff) as { c: number };
+    for (const cat of CATEGORIES) {
+      const a = db
+        .prepare('SELECT COUNT(*) as c FROM audit_log WHERE category = ? AND ts < ?')
+        .get(cat, cutoffsByCategory[cat]) as { c: number };
+      auditDeletedByCategory[cat] = Number(a.c);
+      auditDeleted += Number(a.c);
+    }
     const b = db.prepare('SELECT COUNT(*) as c FROM backup WHERE ts < ?').get(backupCutoff) as { c: number };
-    auditDeleted = Number(a.c);
     backupDeleted = Number(b.c);
   }
 
   const afterBytes = pageBytes(db);
   return {
     auditDeleted,
+    auditDeletedByCategory,
     backupDeleted,
     bytesReclaimed: Math.max(0, beforeBytes - afterBytes),
     ranAt,

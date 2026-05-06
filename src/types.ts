@@ -49,8 +49,26 @@ export const ConnectionSchema = z.object({
 
 export type Connection = z.infer<typeof ConnectionSchema>;
 
-export const RetentionConfigSchema = z.object({
-  auditDays: z.number().int().min(1).max(3650).default(90),
+export const DEFAULT_RETENTION_BY_CATEGORY = {
+  read: 7,
+  write: 30,
+  ddl: 90,
+  admin: 180,
+  txCtrl: 7,
+} as const satisfies Record<SqlCategory, number>;
+
+export const RetentionByCategorySchema = z.object({
+  read: z.number().int().min(1).max(3650).default(DEFAULT_RETENTION_BY_CATEGORY.read),
+  write: z.number().int().min(1).max(3650).default(DEFAULT_RETENTION_BY_CATEGORY.write),
+  ddl: z.number().int().min(1).max(3650).default(DEFAULT_RETENTION_BY_CATEGORY.ddl),
+  admin: z.number().int().min(1).max(3650).default(DEFAULT_RETENTION_BY_CATEGORY.admin),
+  txCtrl: z.number().int().min(1).max(3650).default(DEFAULT_RETENTION_BY_CATEGORY.txCtrl),
+});
+
+export type RetentionByCategory = z.infer<typeof RetentionByCategorySchema>;
+
+const RetentionInnerSchema = z.object({
+  retentionDaysByCategory: RetentionByCategorySchema.default(DEFAULT_RETENTION_BY_CATEGORY),
   backupDays: z.number().int().min(1).max(3650).default(30),
   auditMaxMB: z.number().int().min(10).max(100000).default(500),
   backupMaxMB: z.number().int().min(10).max(100000).default(1000),
@@ -59,21 +77,35 @@ export const RetentionConfigSchema = z.object({
   tamperEvidentChain: z.boolean().default(false),
 });
 
+export const RetentionConfigSchema = z.preprocess((raw) => {
+  if (raw && typeof raw === 'object') {
+    const r = raw as Record<string, unknown>;
+    if (typeof r.auditDays === 'number' && r.retentionDaysByCategory === undefined) {
+      const d = r.auditDays;
+      r.retentionDaysByCategory = { read: d, write: d, ddl: d, admin: d, txCtrl: d };
+    }
+    delete r.auditDays;
+  }
+  return raw;
+}, RetentionInnerSchema);
+
 export type RetentionConfig = z.infer<typeof RetentionConfigSchema>;
+
+const RETENTION_DEFAULT: RetentionConfig = {
+  retentionDaysByCategory: { ...DEFAULT_RETENTION_BY_CATEGORY },
+  backupDays: 30,
+  auditMaxMB: 500,
+  backupMaxMB: 1000,
+  autoCleanupHours: 24,
+  redactSqlInLog: false,
+  tamperEvidentChain: false,
+};
 
 export const ConfigSchema = z.object({
   version: z.literal(1).default(1),
   connections: z.array(ConnectionSchema).default([]),
   defaultConnection: z.string().optional(),
-  retention: RetentionConfigSchema.default({
-    auditDays: 90,
-    backupDays: 30,
-    auditMaxMB: 500,
-    backupMaxMB: 1000,
-    autoCleanupHours: 24,
-    redactSqlInLog: false,
-    tamperEvidentChain: false,
-  }),
+  retention: RetentionConfigSchema.default(RETENTION_DEFAULT),
 });
 
 export type Config = z.infer<typeof ConfigSchema>;

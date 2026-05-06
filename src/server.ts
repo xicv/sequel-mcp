@@ -36,6 +36,7 @@ import { KeychainSecretStore, type SecretStore } from './vault/keyring.js';
 import { SessionAuthenticator, getTouchID } from './vault/touchid.js';
 import { executeStatement } from './sql/executor.js';
 import { importFromSequelAce } from './importer/sequelAcePlist.js';
+import { readSequelAceHistory, statSequelAceHistory } from './importer/sequelAceHistory.js';
 import { makeConfirmFn } from './elicit/confirm.js';
 
 const PACKAGE_NAME = 'sequel-mcp';
@@ -403,6 +404,7 @@ function registerTools(mcp: McpServer, deps: ToolDeps): void {
           policy: c.policy,
         })),
       );
+      const sequelAceHistory = statSequelAceHistory();
       return jsonResult({
         app: 'sequel-mcp',
         version: PACKAGE_VERSION,
@@ -414,6 +416,13 @@ function registerTools(mcp: McpServer, deps: ToolDeps): void {
         touchID: { available: tid.available },
         defaultConnection: def,
         connections: conns,
+        sequelAceHistory: {
+          available: sequelAceHistory.exists,
+          path: sequelAceHistory.path,
+          entryCount: sequelAceHistory.entryCount,
+          sizeBytes: sequelAceHistory.sizeBytes,
+        },
+        retention: cfg.retention,
         note: 'no passwords or Keychain secrets included; hostnames/usernames/key paths ARE included — redact before posting publicly.',
       });
     },
@@ -514,6 +523,42 @@ function registerTools(mcp: McpServer, deps: ToolDeps): void {
         secretStore: deps.secretStore,
       });
       return jsonResult(result);
+    },
+  );
+
+  mcp.registerTool(
+    'sequel_ace_history',
+    {
+      title: 'Read Sequel Ace query history',
+      description:
+        'Read the queryHistory.db that Sequel Ace maintains in its sandbox. Returns distinct queries the user has run in the GUI (deduplicated by Sequel Ace, with latest createdTime). Read-only — no modification. Optional sinceIso, search (LIKE %text%), limit (default 200, max 5000).',
+      annotations: { readOnlyHint: true, idempotentHint: true, openWorldHint: false },
+      inputSchema: {
+        sinceIso: z.string().optional(),
+        search: z.string().optional(),
+        limit: z.number().int().min(1).max(5000).default(200),
+      },
+    },
+    async (args) => {
+      const stat = statSequelAceHistory();
+      if (!stat.exists) {
+        return toolError(
+          `Sequel Ace queryHistory.db not found at ${stat.path}. Open Sequel Ace and run at least one query first, or check that Sequel Ace is installed.`,
+        );
+      }
+      const rows = readSequelAceHistory({
+        sinceIso: args.sinceIso,
+        search: args.search,
+        limit: args.limit,
+      });
+      return jsonResult({
+        source: 'sequel-ace',
+        path: stat.path,
+        totalAvailable: stat.entryCount,
+        returned: rows.length,
+        note: 'Sequel Ace dedupes by query text — only the latest createdTime is kept per distinct query.',
+        rows,
+      });
     },
   );
 
@@ -653,10 +698,18 @@ function registerTools(mcp: McpServer, deps: ToolDeps): void {
     {
       title: 'Update retention / cleanup config',
       description:
-        'Configure how long audit entries and backups are kept, hard size caps, and how often auto-cleanup runs on server boot.',
+        'Configure per-category retention (read=7, write=30, ddl=90, admin=180, txCtrl=7 by default), backup retention, hard size caps, and how often auto-cleanup runs on server boot. Pass any subset; missing fields keep current values.',
       annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false },
       inputSchema: {
-        auditDays: z.number().int().min(1).max(3650).optional(),
+        retentionDaysByCategory: z
+          .object({
+            read: z.number().int().min(1).max(3650).optional(),
+            write: z.number().int().min(1).max(3650).optional(),
+            ddl: z.number().int().min(1).max(3650).optional(),
+            admin: z.number().int().min(1).max(3650).optional(),
+            txCtrl: z.number().int().min(1).max(3650).optional(),
+          })
+          .optional(),
         backupDays: z.number().int().min(1).max(3650).optional(),
         auditMaxMB: z.number().int().min(10).max(100000).optional(),
         backupMaxMB: z.number().int().min(10).max(100000).optional(),
@@ -667,7 +720,15 @@ function registerTools(mcp: McpServer, deps: ToolDeps): void {
     },
     async (args) => {
       const cfg = await loadConfig();
-      const next = RetentionConfigSchema.parse({ ...cfg.retention, ...args });
+      const merged = {
+        ...cfg.retention,
+        ...args,
+        retentionDaysByCategory: {
+          ...cfg.retention.retentionDaysByCategory,
+          ...(args.retentionDaysByCategory ?? {}),
+        },
+      };
+      const next = RetentionConfigSchema.parse(merged);
       await saveConfig({ ...cfg, retention: next });
       return jsonResult(next);
     },

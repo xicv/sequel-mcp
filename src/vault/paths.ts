@@ -50,7 +50,7 @@ export function legacyKeychainServiceName(connectionName: string): string {
   return `${LEGACY_KEYCHAIN_SERVICE_PREFIX} : ${connectionName}`;
 }
 
-export function sequelAceFavoritesPlistPath(): string {
+export function sequelAceDataDir(): string {
   return path.join(
     os.homedir(),
     'Library',
@@ -61,8 +61,15 @@ export function sequelAceFavoritesPlistPath(): string {
     'Application Support',
     'Sequel Ace',
     'Data',
-    'Favorites.plist',
   );
+}
+
+export function sequelAceFavoritesPlistPath(): string {
+  return path.join(sequelAceDataDir(), 'Favorites.plist');
+}
+
+export function sequelAceQueryHistoryDbPath(): string {
+  return path.join(sequelAceDataDir(), 'queryHistory.db');
 }
 
 export function sequelAceLegacyKeychainServiceName(

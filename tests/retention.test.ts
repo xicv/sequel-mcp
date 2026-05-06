@@ -56,6 +56,35 @@ describe('cleanupAudit', () => {
   });
 });
 
+describe('per-category retention', () => {
+  it('keeps writes longer than reads at differing windows', () => {
+    const ts7 = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000); // 7 days
+    const ts15 = new Date(Date.now() - 15 * 24 * 60 * 60 * 1000); // 15 days
+    writeAuditEntry(
+      { ts: ts15, requestId: 'r-old-write', connection: 'c', databases: [], category: 'write', sql: 'UPDATE t SET x=1', decision: 'allow', confirmed: false, outcome: 'success' },
+      { redactSqlInLog: false, tamperEvidentChain: false, pathOverride: dbFile },
+    );
+    writeAuditEntry(
+      { ts: ts7, requestId: 'r-old-read', connection: 'c', databases: [], category: 'read', sql: 'SELECT 1', decision: 'allow', confirmed: false, outcome: 'success' },
+      { redactSqlInLog: false, tamperEvidentChain: false, pathOverride: dbFile },
+    );
+
+    const c = RetentionConfigSchema.parse({
+      retentionDaysByCategory: { read: 3, write: 30, ddl: 90, admin: 180, txCtrl: 7 },
+    });
+    const r = cleanupAudit(c, { pathOverride: dbFile });
+    expect(r.auditDeletedByCategory.read).toBe(1);
+    expect(r.auditDeletedByCategory.write).toBe(0);
+  });
+
+  it('legacy auditDays migrates uniformly to all categories', () => {
+    const c = RetentionConfigSchema.parse({ auditDays: 14 });
+    expect(c.retentionDaysByCategory.read).toBe(14);
+    expect(c.retentionDaysByCategory.write).toBe(14);
+    expect(c.retentionDaysByCategory.admin).toBe(14);
+  });
+});
+
 describe('maybeAutoCleanup', () => {
   it('runs on first call (no last_cleanup yet)', () => {
     writeAt(20, 'r1');
