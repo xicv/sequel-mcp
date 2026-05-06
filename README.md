@@ -8,8 +8,6 @@ A Model Context Protocol server for **MySQL/MariaDB** with policy-gated action s
 
 > **Sequel Ace is OPTIONAL.** This is a fully standalone MCP. Sequel Ace integration is a *bootstrap convenience* (one-time import of saved favorites) and a *history augment* (read its query history alongside our audit log). If you don't have Sequel Ace installed, 23 of 25 tools still work — only `import_from_sequel_ace` and `sequel_ace_history` will fail with a clear "not found" error. Use `add_connection` instead.
 
-> Renamed from `sequel-ace-mcp` (≤ 0.1.0) → `sequel-mcp` (0.1.1+). Migration: `npx -y sequel-mcp-migrate` (non-destructive).
-
 ## Capabilities
 
 Current release: **v0.4.0**. Full version history: [CHANGELOG.md](./CHANGELOG.md).
