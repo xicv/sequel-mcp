@@ -1,0 +1,75 @@
+# Dependencies
+node_modules/
+
+# Build output
+dist/
+*.tsbuildinfo
+
+# Test coverage
+coverage/
+.nyc_output/
+
+# Environment files (never commit)
+.env
+.env.*
+!.env.example
+
+# Secrets / credentials (defensive — must never be committed)
+*.pem
+*.key
+*.p12
+*.pfx
+*.cer
+*.crt
+id_rsa*
+id_ed25519*
+id_ecdsa*
+id_dsa*
+*.kdbx
+*.sqlite
+credentials.json
+secrets.json
+secrets.yml
+secrets.yaml
+
+# npm pack output
+*.tgz
+*.tar.gz
+
+# npm auth tokens
+.npmrc
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Editors / IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*.swn
+.zed/
+.cursor/
+*~
+
+# Caches
+.cache/
+.turbo/
+.parcel-cache/
+.eslintcache
+
+# Logs
+*.log
+logs/
+
+# Backups
+*.bak
+*.bak-*
+*.orig
+
+# Project-specific: original Sequel Ace clone used as reference fixture
+fixtures/
+
+# Local user runtime data — never inside repo, but defensive
+.config/
