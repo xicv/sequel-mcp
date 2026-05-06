@@ -474,25 +474,6 @@ If a connection has SSH details (auto-imported from Sequel Ace, or set via `add_
 
 Tilde paths (`~/.ssh/id_rsa`) auto-expanded.
 
-## Migrating from sequel-ace-mcp
-
-If you previously installed `sequel-ace-mcp@0.1.0`:
-
-```bash
-npx -y sequel-mcp-migrate          # if installed via npm
-# from a source checkout:
-# node dist/migrate.js
-```
-
-Copies `~/.config/sequel-ace-mcp/config.json` → `~/.config/sequel-mcp/config.json` and re-keys macOS Keychain entries from service `sequel-ace-mcp : <name>` to `sequel-mcp : <name>`. Non-destructive by default — old entries stay until you pass `--purge`. `--force` to overwrite an existing new-name config; `--json` for machine-readable.
-
-After migration, re-wire your MCP client:
-
-```bash
-claude mcp remove sequel-ace
-claude mcp add --scope user sequel-mcp -- npx -y sequel-mcp
-```
-
 ## Doctor / debugging
 
 ```bash
