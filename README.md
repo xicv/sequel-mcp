@@ -95,21 +95,13 @@ Any client that speaks the MCP stdio transport works. Point its `command` at `np
 
 ```text
 "Add a sequel-mcp connection 'local' on 127.0.0.1:3306, user root, database app, read-only preset."
-   → add_connection. Password elicited mid-call → macOS Keychain.
-
 "Set the default connection to local."
 "Count rows in users."
-   → query({sql: 'SELECT COUNT(*) FROM users'})  — uses local default
 ```
 
-If you already use Sequel Ace:
+Already use Sequel Ace? `"Import my Sequel Ace connections."` instead — macOS prompts once per favorite to allow Keychain access (click *Always Allow*).
 
-```text
-"Import my Sequel Ace connections."
-   → import_from_sequel_ace. macOS prompts once per favorite to allow Keychain access; click "Always Allow".
-```
-
-There are **no credentials in `claude_desktop_config.json`** or any other config file. Passwords live only in the macOS Keychain.
+Passwords are elicited mid-call into the macOS Keychain. **No credentials in any config file.**
 
 ## Action sets — the permission model
 
