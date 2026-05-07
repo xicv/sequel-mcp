@@ -10,7 +10,7 @@ A Model Context Protocol server for **MySQL/MariaDB** with policy-gated action s
 
 ## Capabilities
 
-Current release: **v0.4.0**. Full version history: [CHANGELOG.md](./CHANGELOG.md).
+Current release: **v0.5.0**. Full version history: [CHANGELOG.md](./CHANGELOG.md).
 
 - **Two-layer permissions** — connection-level baseline + per-database overrides; strictest-wins for multi-DB statements (fail-closed).
 - **Pre-mutation backups** for UPDATE / DELETE / REPLACE / INSERT / TRUNCATE / DROP / ALTER, including multi-table UPDATE/DELETE.
@@ -19,6 +19,9 @@ Current release: **v0.4.0**. Full version history: [CHANGELOG.md](./CHANGELOG.md
 - **Per-category retention** — `read=7d / write=30d / ddl=90d / admin=180d / txCtrl=7d`; auto-cleanup on boot.
 - **Unified history search** — merges our audit log with Sequel Ace's `queryHistory.db` (when present) into one timeline.
 - **macOS-native security** — Keychain-stored passwords (non-syncable, `WhenUnlockedThisDeviceOnly`); Touch ID via `LocalAuthentication`; SSH tunnels via `ssh2`.
+- **Database inside a remote Docker container** *(0.5.0)* — five access patterns documented; first-class support for the closed-container case via SSH + `docker exec` stdio bridge with allowlist-validated commands.
+- **SSH host key verification** *(0.5.0, opt-in)* — `hostKeyPolicy: 'strict'` matches against `~/.ssh/known_hosts`; SHA-256 fingerprint logged on every connect so users can opt in. `@revoked` markers honored even in lenient mode.
+- **TLS server name preservation through tunnel** *(0.5.0, opt-in)* — `sslServerName` forwards original hostname into TLS handshake so cert SAN verification works against the real DB host instead of the tunnel's `127.0.0.1`.
 
 ## Install
 
@@ -66,7 +69,7 @@ Verify:
 claude mcp list   # sequel-mcp should appear with ✓ Connected
 ```
 
-In a Claude Code session, `/mcp` lists every tool the server exposes (25 at v0.4.0).
+In a Claude Code session, `/mcp` lists every tool the server exposes (25 at v0.5.0).
 
 ### Wire into Claude Desktop
 
@@ -291,6 +294,94 @@ The merge rule (Apache Ranger semantics): for each category in the statement, ta
 
 Every step is one tool call. The audit log is append-only — even if the SQLite file is moved, the rows stay (no UPDATE/DELETE on it from the MCP itself).
 
+### Production database inside a Docker container on a remote bastion (0.5.0)
+
+The realistic shape of a hardened production setup:
+
+```
+your laptop ──SSH (strict host key)──> bastion.example.com
+                                             │
+                                             ├─ docker exec -i mysql_prod nc 127.0.0.1 3306
+                                             ▼
+                                       container with MySQL 8.4 (TLS on)
+```
+
+Step by step:
+
+```text
+1. "On bastion.example.com, run docker ps to confirm container 'mysql_prod' is up."
+   → Use your normal SSH client to verify infrastructure first. NOT through MCP.
+   → Capture the SHA-256 fingerprint shown when you connect — paste into known_hosts:
+       ssh-keyscan -t ed25519 bastion.example.com >> ~/.ssh/known_hosts
+
+2. "Add a connection named prod-mysql, host 127.0.0.1, port 3306, user readonly,
+    ssl true, ssl server name mysql.prod.internal,
+    ssh host bastion.example.com, ssh user deploy, ssh key path ~/.ssh/id_ed25519,
+    ssh host key policy strict,
+    ssh docker container mysql_prod, ssh docker bridge tool nc,
+    policy preset read-only."
+   → Single tool call. Password elicited mid-call into Keychain.
+   → strict mode rejects the connection if the host key changes (MitM signal).
+   → sslServerName makes mysql2 verify the cert SAN against mysql.prod.internal.
+   → read-only preset means writes are denied, not "confirm".
+
+3. "On prod-mysql, list databases."
+   → First query opens the SSH session, runs docker inspect, verifies nc is in
+     the container, opens the exec channel, mysql2 handshakes over TLS through
+     the bridge, query runs, all logged.
+
+4. "Search audit log for prod-mysql in the last hour."
+   → Should show one entry: outcome=success, category=read.
+```
+
+If any of these go wrong, the failure mode is *visible*:
+- Host key mismatch → `SSH host key MISMATCH for bastion.example.com:22 (strict mode — rejecting)`. Connection fails fast.
+- Container missing → `container mysql_prod is not running`. Connection fails fast.
+- Bridge tool absent → `bridge tool 'nc' not found in container 'mysql_prod'`. Pick `socat` or `ncat` instead.
+- TLS cert mismatch → mysql2 raises `ERR_TLS_CERT_ALTNAME_INVALID` with the actual SAN names — fix `sslServerName` to match.
+
+### Hardening an existing tunnel: lenient → strict host key (0.5.0)
+
+For users with pre-0.5.0 connections, the upgrade path is:
+
+```text
+1. "Run a query on <existing-conn> — anything trivial like SELECT 1."
+   → Watch sequel-mcp stderr (Claude Code shows it under MCP logs). You'll see:
+       [sequel-mcp] SSH host bastion.example.com:22 fingerprint=SHA256:abc123…
+
+2. (Out of band, in your shell:)
+   ssh-keyscan -t ed25519 bastion.example.com | grep -v '^#' >> ~/.ssh/known_hosts
+   → Verify the captured key has the same SHA-256 fingerprint as step 1.
+     Compare via: ssh-keygen -lf ~/.ssh/known_hosts -F bastion.example.com
+
+3. "Re-add the connection <existing-conn> with ssh host key policy strict."
+   → add_connection is idempotent on `name`; existing fields are preserved
+     except those you explicitly change. Password not re-prompted unless
+     missing in Keychain.
+
+4. "Run a query on <existing-conn>." → still works.
+   → Now MitM on the SSH leg = visible failure, not silent compromise.
+```
+
+Optional: scope known_hosts to a project file:
+
+```text
+"Re-add the connection prod-mysql with ssh known hosts path
+ /Users/me/projects/sequel-mcp/.known_hosts and ssh host key policy strict."
+```
+
+### TLS to MySQL when the cert was issued for the real DB hostname
+
+If your DBA gave the MySQL server a cert with SAN `mysql.prod.internal`, but you connect via SSH tunnel (so mysql2 sees `127.0.0.1`), the SAN check fails or silently passes depending on mysql2 internals. Pin it:
+
+```text
+"Add a connection … ssl true, ssl server name mysql.prod.internal."
+```
+
+mysql2 receives `{ servername: 'mysql.prod.internal' }`, the TLS handshake's SNI header carries that name, and the cert SAN verification compares against it. Mismatched cert = loud failure, not silent bypass.
+
+If your cert SAN was actually issued for `127.0.0.1` (unusual, sometimes done for tunnel-only setups), leave `sslServerName` unset — the legacy behavior remains.
+
 ### When NOT to use this MCP
 
 - **You need Multi-statement scripts.** Out of scope. The MCP rejects them at parse time *and* at the driver level. Use a migration tool.
@@ -460,6 +551,9 @@ Set once, omit on every subsequent call:
 7. **Audit log** — append-only SQLite; optional SHA-256 chain.
 8. **Row cap + statement timeout** — `MAX_EXECUTION_TIME` hint per category.
 9. **Touch ID** — optional per-session unlock via macOS LocalAuthentication.
+10. **SSH host key verification** *(0.5.0)* — opt-in `hostKeyPolicy='strict'` matches against `~/.ssh/known_hosts`; rejects unknown hosts and key mismatches. `@revoked` markers honored in all modes. Defends against MitM on the SSH leg of every tunnel.
+11. **TLS server name preservation** *(0.5.0)* — opt-in `sslServerName` forwards original hostname into mysql2's TLS handshake. SNI + cert SAN verification target the real DB host, not the tunnel's `127.0.0.1`.
+12. **Docker exec command allowlist** *(0.5.0)* — bridge command components (container name, host, port, tool) validated by zod regex AND inside `buildBridgeCommand`. No shell metacharacter can reach the SSH command line even if the schema layer is bypassed.
 
 ## Credentials — local-only by design
 
@@ -473,6 +567,39 @@ Set once, omit on every subsequent call:
 If a connection has SSH details (auto-imported from Sequel Ace, or set via `add_connection`), `executeStatement` opens an `ssh2` local-to-remote tunnel before connecting `mysql2`. SSH passwords/passphrases live in Keychain under `<conn-name>::ssh`.
 
 Tilde paths (`~/.ssh/id_rsa`) auto-expanded.
+
+### Host key verification (opt-in, 0.5.0)
+
+Every SSH connect now logs the SHA-256 fingerprint of the remote host's key:
+
+```
+[sequel-mcp] SSH host bastion.example.com:22 fingerprint=SHA256:abc123…
+```
+
+Default policy is `lenient` (accept any key — preserves the pre-0.5.0 behavior so no one breaks on upgrade). Once you've captured the fingerprint and added it to `~/.ssh/known_hosts`, switch to strict:
+
+```text
+"Add a connection … ssh host key policy strict."
+```
+
+Strict mode:
+- Rejects unknown hosts (no entry in known_hosts).
+- Rejects key mismatches (MitM signal — fingerprint changed).
+- Honors `*` wildcards, `[host]:port` brackets, hashed (`|1|salt|hash`) and `@cert-authority` entries.
+
+`@revoked` markers are enforced **even in lenient mode** — if you've explicitly revoked a key, sequel-mcp refuses regardless of policy.
+
+Custom known_hosts path supported via `sshKnownHostsPath` (e.g., a project-scoped file separate from your personal one).
+
+### TLS to MySQL through a tunnel (opt-in, 0.5.0)
+
+When `ssl: true` and a tunnel is open, mysql2 connects to `127.0.0.1` so a cert with SAN matching the original DB hostname will silently bypass or fail verification. Fix per connection by opting into:
+
+```text
+"Add a connection … ssl true, ssl server name db.prod.example.com."
+```
+
+This forwards the original hostname into mysql2's TLS handshake (SNI + cert SAN check). Opt-in to avoid breaking legacy users whose certs intentionally matched `127.0.0.1`.
 
 ## Database inside a Docker container
 
@@ -551,7 +678,7 @@ The MCP will:
 
 **Limitations:**
 
-- TLS to the MySQL server through any tunnel does **not** verify the original hostname — set `ssl: false` for tunneled connections, or rely on SSH transport encryption.
+- TLS hostname verification through any tunnel needs the new `sslServerName` opt-in (see *TLS to MySQL through a tunnel* above). Without it, mysql2 sees `127.0.0.1` and SAN-matches against that.
 - Each query opens a fresh SSH + docker exec session (no pooling yet).
 - Use this only against trusted images. A malicious container could refuse to connect or return crafted MySQL handshakes.
 
@@ -577,7 +704,7 @@ The report includes runtime versions, every configured connection (host, user, d
 npm install
 npm run typecheck
 npm run lint
-npm test                                  # 87 tests as of v0.4.0
+npm test                                  # 169 tests as of v0.5.0
 npm run build
 npm run build:touchid                     # macOS only — Swift LocalAuthentication helper
 npm run security:scan                     # local secret regex scan
