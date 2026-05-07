@@ -367,7 +367,7 @@ Optional: scope known_hosts to a project file:
 
 ```text
 "Re-add the connection prod-mysql with ssh known hosts path
- /Users/me/projects/sequel-mcp/.known_hosts and ssh host key policy strict."
+ ~/projects/sequel-mcp/.known_hosts and ssh host key policy strict."
 ```
 
 ### TLS to MySQL when the cert was issued for the real DB hostname

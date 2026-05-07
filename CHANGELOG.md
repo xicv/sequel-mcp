@@ -2,6 +2,17 @@
 
 All notable changes to **sequel-mcp** are documented here. Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.5.1] — 2026-05-07
+
+### Changed
+
+- README republished with the 0.5.0 feature surface fully documented: three new Capabilities bullets, SSH tunnels section gains opt-in subsections for host key verification + TLS server name, Defence-in-depth list extended with three new numbered layers (SSH known_hosts strict, TLS servername preservation, docker-exec command allowlist), Security playbook adds three real-use scenarios (production Docker bastion end-to-end, lenient→strict host-key migration, TLS to MySQL when cert was issued for the real DB hostname).
+- Test count line bumped from 87 (v0.4.0) to 169 (v0.5.0).
+
+### Note
+
+No code change. Docs-only republish so `npm view sequel-mcp readme` matches the GitHub copy.
+
 ## [0.5.0] — 2026-05-07
 
 ### Added
