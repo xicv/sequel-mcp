@@ -131,7 +131,19 @@ function registerTools(mcp: McpServer, deps: ToolDeps): void {
         user: c.user,
         database: c.database,
         ssl: c.ssl,
-        ssh: c.ssh ? { host: c.ssh.host, user: c.ssh.user, port: c.ssh.port } : null,
+        ssh: c.ssh
+          ? {
+              host: c.ssh.host,
+              user: c.ssh.user,
+              port: c.ssh.port,
+              docker: c.ssh.docker
+                ? {
+                    container: c.ssh.docker.container,
+                    bridgeTool: c.ssh.docker.bridgeTool,
+                  }
+                : null,
+            }
+          : null,
         policy: c.policy,
         isDefault: c.name === cfg.defaultConnection,
         hasStoredPassword: undefined as boolean | undefined,
@@ -232,6 +244,12 @@ function registerTools(mcp: McpServer, deps: ToolDeps): void {
     },
   );
 
+  // OWASP MCP Top 10 (2026) input hardening note:
+  // MCP SDK v1.29 constrains `inputSchema` to ZodRawShape; we cannot pass
+  // `z.object({...}).strict()` directly. Zod's default object behavior (strip)
+  // discards unknown keys before the handler sees them, so extra LLM-supplied
+  // fields cannot influence handler behavior. ConnectionSchema.parse() at the
+  // end provides defense-in-depth for the persisted shape.
   mcp.registerTool(
     'add_connection',
     {
@@ -256,6 +274,17 @@ function registerTools(mcp: McpServer, deps: ToolDeps): void {
         sshPort: z.number().int().min(1).max(65535).optional(),
         sshUser: z.string().optional(),
         sshKeyPath: z.string().optional(),
+        sshDockerContainer: z
+          .string()
+          .regex(
+            /^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$/,
+            'docker container name must be alphanumeric/_.- and start with alnum',
+          )
+          .optional(),
+        sshDockerBridgeTool: z.enum(['socat', 'nc', 'ncat']).optional(),
+        sshHostKeyPolicy: z.enum(['lenient', 'strict']).optional(),
+        sshKnownHostsPath: z.string().min(1).max(1024).optional(),
+        sslServerName: z.string().min(1).max(253).optional(),
       },
     },
     async (args) => {
@@ -287,6 +316,14 @@ function registerTools(mcp: McpServer, deps: ToolDeps): void {
               user: args.sshUser,
               authMethod: args.sshKeyPath ? ('key' as const) : ('password' as const),
               privateKeyPath: args.sshKeyPath,
+              docker: args.sshDockerContainer
+                ? {
+                    container: args.sshDockerContainer,
+                    bridgeTool: args.sshDockerBridgeTool ?? ('nc' as const),
+                  }
+                : undefined,
+              hostKeyPolicy: args.sshHostKeyPolicy,
+              knownHostsPath: args.sshKnownHostsPath,
             }
           : undefined;
 
@@ -297,6 +334,7 @@ function registerTools(mcp: McpServer, deps: ToolDeps): void {
         user: args.user,
         database: args.database,
         ssl: args.ssl,
+        sslServerName: args.sslServerName,
         ssh,
         policy: policyFromPreset(args.policyPreset as PolicyPresetName),
       });
@@ -400,6 +438,12 @@ function registerTools(mcp: McpServer, deps: ToolDeps): void {
                 user: c.ssh.user,
                 authMethod: c.ssh.authMethod,
                 privateKeyPath: c.ssh.privateKeyPath ?? null,
+                docker: c.ssh.docker
+                  ? {
+                      container: c.ssh.docker.container,
+                      bridgeTool: c.ssh.docker.bridgeTool,
+                    }
+                  : null,
               }
             : null,
           policy: c.policy,
@@ -1088,7 +1132,18 @@ function registerResources(
           port: c.port,
           user: c.user,
           database: c.database,
-          ssh: c.ssh ? { host: c.ssh.host, user: c.ssh.user } : null,
+          ssh: c.ssh
+            ? {
+                host: c.ssh.host,
+                user: c.ssh.user,
+                docker: c.ssh.docker
+                  ? {
+                      container: c.ssh.docker.container,
+                      bridgeTool: c.ssh.docker.bridgeTool,
+                    }
+                  : null,
+              }
+            : null,
           policy: c.policy,
           presets: Object.keys(POLICY_PRESETS),
           hasPassword: await deps.secretStore.hasPassword(c.name, c.user),

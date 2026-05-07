@@ -474,6 +474,87 @@ If a connection has SSH details (auto-imported from Sequel Ace, or set via `add_
 
 Tilde paths (`~/.ssh/id_rsa`) auto-expanded.
 
+## Database inside a Docker container
+
+If the MySQL/MariaDB instance lives inside a Docker container on a remote server, pick the access pattern that matches your infra. Five options, listed simplest first.
+
+### 1. Publish the container port to host loopback (recommended for standalone Docker)
+
+In `docker-compose.yml` or `docker run`:
+
+```yaml
+services:
+  mysql:
+    image: mysql:8.4
+    ports:
+      - "127.0.0.1:3306:3306"   # host loopback only — not internet-exposed
+```
+
+Then add a normal SSH-tunnel connection — `host=127.0.0.1` is resolved on the server side after SSH.
+
+```text
+"Add a connection named prod-db, host 127.0.0.1, port 3306, user root, ssh host server.example.com, ssh user deploy, ssh key path ~/.ssh/id_ed25519."
+```
+
+No new flags. Existing tunnel handles it.
+
+### 2. Tailscale subnet router / direct tailnet name
+
+If your Docker host runs a Tailscale subnet router, the container's bridge IP becomes routable from your laptop over the tailnet. Set `host` to the container's tailnet name or bridge IP. No SSH needed.
+
+### 3. AWS SSM Session Manager port forwarding (RDS / private VPC)
+
+Open the SSM tunnel out-of-band:
+
+```bash
+aws ssm start-session \
+  --target <ec2-jump-instance-id> \
+  --document-name AWS-StartPortForwardingSessionToRemoteHost \
+  --parameters '{"host":["mydb.rds.amazonaws.com"],"portNumber":["3306"],"localPortNumber":["56789"]}'
+```
+
+Then add a sequel-mcp connection to `127.0.0.1:56789` with no SSH config.
+
+### 4. Teleport database access
+
+Run `tsh proxy db --tunnel <db-name>` and connect to the local port it prints. SSO + ephemeral certs handled by Teleport.
+
+### 5. SSH + `docker exec` stdio bridge (closed containers)
+
+Use this when the container has **no published port** and **no reachable bridge IP** from the SSH host. The MCP opens an SSH session to the server, then runs `docker exec -i <container> nc <host> <port>` to pipe MySQL bytes through the container's stdin/stdout.
+
+**Container requirement:** must have one of `nc`, `socat`, or `ncat` installed. BusyBox `nc` ships in Alpine and `mariadb`/`mysql` official images by default.
+
+**Add a connection:**
+
+```text
+"Add a connection named prod-mysql, host 127.0.0.1, port 3306, user root,
+ ssh host server.example.com, ssh user deploy, ssh key path ~/.ssh/id_ed25519,
+ ssh docker container mysql_prod, ssh docker bridge tool nc."
+```
+
+The MCP will:
+
+1. Open SSH session (existing logic).
+2. Run `docker inspect <container>` to verify it's running and capture image + start time.
+3. Run `docker exec <container> sh -c 'command -v <tool>'` to verify the bridge tool exists.
+4. For each MySQL connection, open a new `docker exec -i <container> <tool> <host> <port>` exec channel and pipe a local TCP socket through it. `mysql2` speaks raw MySQL binary protocol over that pipe — prepared statements, multi-result sets, etc., all work.
+
+**Security model:**
+
+- Container name, remote host, remote port, and bridge tool are validated by zod regex (alphanumeric + `._-` only). No shell metacharacters can reach the SSH command line.
+- SSH user must already have Docker access on the server (`docker` group membership ≈ root-equivalent). Your existing SSH ACLs are the trust boundary.
+- All bridge commands are logged to stderr (visible to the MCP host) for transparency.
+- The `docker exec` process dies with stdin EOF — closing the local socket terminates the remote process; killing the MCP propagates SIGHUP through SSH to clean up.
+
+**Performance note:** stdio bridging adds one extra hop vs raw `forwardOut`. For interactive queries it's negligible; for bulk imports prefer publishing the port (option 1).
+
+**Limitations:**
+
+- TLS to the MySQL server through any tunnel does **not** verify the original hostname — set `ssl: false` for tunneled connections, or rely on SSH transport encryption.
+- Each query opens a fresh SSH + docker exec session (no pooling yet).
+- Use this only against trusted images. A malicious container could refuse to connect or return crafted MySQL handshakes.
+
 ## Doctor / debugging
 
 ```bash

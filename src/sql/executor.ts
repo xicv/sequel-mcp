@@ -1,6 +1,7 @@
 import mysql, { type ConnectionOptions } from 'mysql2/promise';
 import type { Connection, Policy, SqlCategory } from '../types.js';
 import { openSshTunnel, type TunnelHandle } from './tunnel.js';
+import { openSshDockerTunnel } from './dockerTunnel.js';
 import { injectMaxExecutionTime } from './hints.js';
 import { extractBackupSpec, isBackupRequired } from '../backup/extractor.js';
 import { captureBackup, captureInsertHint, BackupOverflowError } from '../backup/capture.js';
@@ -28,7 +29,17 @@ export interface ExecuteResult {
 
 const READ_ONLY_CATEGORIES: ReadonlySet<SqlCategory> = new Set(['read']);
 
-function buildBaseOptions(args: { connection: Connection; password: string; database?: string }): ConnectionOptions {
+export function buildBaseOptions(args: {
+  connection: Connection;
+  password: string;
+  database?: string;
+}): ConnectionOptions {
+  let ssl: ConnectionOptions['ssl'];
+  if (args.connection.ssl) {
+    ssl = args.connection.sslServerName
+      ? ({ servername: args.connection.sslServerName } as unknown as ConnectionOptions['ssl'])
+      : {};
+  }
   return {
     host: args.connection.host,
     port: args.connection.port,
@@ -36,7 +47,7 @@ function buildBaseOptions(args: { connection: Connection; password: string; data
     password: args.password,
     database: args.database ?? args.connection.database,
     multipleStatements: false,
-    ssl: args.connection.ssl ? {} : undefined,
+    ssl,
     dateStrings: true,
     decimalNumbers: false,
     supportBigNumbers: true,
@@ -59,13 +70,30 @@ export async function executeStatement(params: ExecuteParams): Promise<ExecuteRe
     let host = params.connection.host;
     let port = params.connection.port;
     if (params.connection.ssh) {
-      log(`${tag} opening SSH tunnel to ${params.connection.ssh.host}:${params.connection.ssh.port}`);
-      tunnel = await openSshTunnel({
-        ssh: params.connection.ssh,
-        sshPassword: params.sshPassword,
-        remoteHost: params.connection.host,
-        remotePort: params.connection.port,
-      });
+      if (params.connection.ssh.docker) {
+        log(
+          `${tag} opening SSH+docker tunnel via ${params.connection.ssh.host}:${params.connection.ssh.port} → container ${params.connection.ssh.docker.container} (bridge=${params.connection.ssh.docker.bridgeTool})`,
+        );
+        const dt = await openSshDockerTunnel({
+          ssh: params.connection.ssh,
+          sshPassword: params.sshPassword,
+          docker: params.connection.ssh.docker,
+          remoteHost: params.connection.host,
+          remotePort: params.connection.port,
+        });
+        tunnel = dt;
+        log(
+          `${tag} container=${dt.containerImage} started=${dt.containerStartedAt}`,
+        );
+      } else {
+        log(`${tag} opening SSH tunnel to ${params.connection.ssh.host}:${params.connection.ssh.port}`);
+        tunnel = await openSshTunnel({
+          ssh: params.connection.ssh,
+          sshPassword: params.sshPassword,
+          remoteHost: params.connection.host,
+          remotePort: params.connection.port,
+        });
+      }
       host = tunnel.localHost;
       port = tunnel.localPort;
       log(`${tag} tunnel ready on ${host}:${port}`);

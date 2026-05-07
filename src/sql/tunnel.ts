@@ -4,6 +4,7 @@ import path from 'node:path';
 import fs from 'node:fs/promises';
 import { Client, type ConnectConfig } from 'ssh2';
 import type { SshTunnel } from '../types.js';
+import { buildHostVerifier, loadKnownHosts } from './sshHostKey.js';
 
 function expandTilde(p: string): string {
   if (!p.startsWith('~')) return p;
@@ -26,11 +27,20 @@ export async function openSshTunnel(args: {
 }): Promise<TunnelHandle> {
   const { ssh } = args;
   const client = new Client();
+  const policy = ssh.hostKeyPolicy ?? 'lenient';
+  const entries = await loadKnownHosts(ssh.knownHostsPath);
   const sshConfig: ConnectConfig = {
     host: ssh.host,
     port: ssh.port,
     username: ssh.user,
     readyTimeout: 15000,
+    hostVerifier: buildHostVerifier({
+      policy,
+      host: ssh.host,
+      port: ssh.port,
+      entries,
+      log: (msg) => process.stderr.write(`[sequel-mcp] ${msg}\n`),
+    }),
   };
   if (ssh.authMethod === 'password') {
     if (!args.sshPassword) throw new Error('SSH tunnel requires password but none was supplied');

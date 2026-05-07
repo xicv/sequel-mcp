@@ -32,6 +32,7 @@ interface ConnectionReport {
   user: string;
   database: string | null;
   ssl: boolean;
+  sslServerName: string | null;
   ssh:
     | {
         host: string;
@@ -40,6 +41,14 @@ interface ConnectionReport {
         authMethod: 'password' | 'key';
         privateKeyPath: string | null;
         privateKeyExists: boolean | null;
+        hostKeyPolicy: 'lenient' | 'strict' | null;
+        knownHostsPath: string | null;
+        docker:
+          | {
+              container: string;
+              bridgeTool: 'socat' | 'nc' | 'ncat';
+            }
+          | null;
       }
     | null;
   policy: Connection['policy'];
@@ -153,6 +162,14 @@ async function buildReport(opts: { probe: boolean }): Promise<DoctorReport> {
         authMethod: c.ssh.authMethod,
         privateKeyPath: keyPath,
         privateKeyExists: expanded ? await fileExists(expanded) : null,
+        hostKeyPolicy: c.ssh.hostKeyPolicy ?? null,
+        knownHostsPath: c.ssh.knownHostsPath ?? null,
+        docker: c.ssh.docker
+          ? {
+              container: c.ssh.docker.container,
+              bridgeTool: c.ssh.docker.bridgeTool,
+            }
+          : null,
       };
     }
 
@@ -163,6 +180,7 @@ async function buildReport(opts: { probe: boolean }): Promise<DoctorReport> {
       user: c.user,
       database: c.database ?? null,
       ssl: c.ssl,
+      sslServerName: c.sslServerName ?? null,
       ssh: sshReport,
       policy: c.policy,
       hasStoredPassword: hasPwd,
@@ -233,6 +251,13 @@ function renderText(r: DoctorReport): string {
         if (c.ssh.authMethod === 'password' || c.ssh.authMethod === 'key') {
           lines.push(`      ssh-secret      : ${badge(c.hasStoredSshSecret)} (only required when key has passphrase or auth=password)`);
         }
+        lines.push(`      host-key-policy : ${c.ssh.hostKeyPolicy ?? 'lenient (default)'}${c.ssh.knownHostsPath ? ` (known_hosts=${c.ssh.knownHostsPath})` : ''}`);
+        if (c.ssh.docker) {
+          lines.push(`      docker-tunnel   : container=${c.ssh.docker.container} bridge=${c.ssh.docker.bridgeTool}`);
+        }
+      }
+      if (c.sslServerName) {
+        lines.push(`      tls-servername  : ${c.sslServerName}`);
       }
       lines.push(`      policy          : read=${c.policy.read} write=${c.policy.write} ddl=${c.policy.ddl} admin=${c.policy.admin} touchID=${c.policy.requireTouchID}`);
       lines.push(`      limits          : rowCap=${c.policy.rowCap} stmtTimeoutMs=${c.policy.stmtTimeoutMs}`);

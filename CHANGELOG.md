@@ -2,6 +2,32 @@
 
 All notable changes to **sequel-mcp** are documented here. Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.5.0] — 2026-05-07
+
+### Added
+
+- **Database access through Docker container on a remote server** — when a MySQL/MariaDB instance lives inside a Docker container with no published port, `add_connection` now accepts `sshDockerContainer` + `sshDockerBridgeTool` (`nc` | `socat` | `ncat`). Each query opens an SSH session to the host, runs `docker inspect` to confirm the container is running, verifies the bridge tool is present, then pipes a local TCP socket through `docker exec -i <container> <tool> <host> <port>`. `mysql2` continues to speak raw MySQL binary protocol over the pipe — prepared statements, multi-result sets, and policy gates all unchanged. New `src/sql/dockerTunnel.ts` is fully separate from the existing port-forward `tunnel.ts`; legacy SSH connections are unaffected.
+- **SSH host key verification (opt-in)** — new optional `sshHostKeyPolicy: 'lenient' | 'strict'` and `sshKnownHostsPath` fields on the `ssh` config block. Default = `lenient` (current accept-any behavior preserved). When set to `strict`, the SHA-256 fingerprint must match an entry in `~/.ssh/known_hosts` (or the user-supplied path); plain, hashed (`|1|salt|hash`), `*` wildcard, `[host]:port`, `@cert-authority`, and `@revoked` markers are all parsed. Fingerprint is logged to stderr on every connect regardless of policy so users can capture it before opting in. `@revoked` markers are honoured even in lenient mode — if the user explicitly revoked a key, we never accept it.
+- **TLS server name preservation through SSH tunnel (opt-in)** — new optional `sslServerName` field on the connection. When `ssl: true` and the connection is tunneled, mysql2 normally talks to `127.0.0.1` and a cert with SAN matching the original hostname will fail verification (or worse, be silently bypassed depending on the mysql2 default). Setting `sslServerName: "db.prod.example.com"` forwards that name into the TLS handshake's SNI/verification. Opt-in to avoid breaking legacy users with cert/host setups that rely on the old behavior.
+
+### Security
+
+- New module `src/sql/sshHostKey.ts` (pure functions, 21 unit tests): `parseKnownHosts`, `matchHost`, `fingerprintSha256`, `keyMatchesEntry` (timing-safe), `verifyHostKey`, `loadKnownHosts`, `buildHostVerifier`. Handles plain, hashed, wildcard, and bracketed-port entries.
+- Docker tunnel command construction is allowlist-validated — container/host names match strict regex (`^[A-Za-z0-9][A-Za-z0-9_.-]*$`, `^[A-Za-z0-9.\-]+$`), bridge tool is an enum, port is integer 1–65535. Validation runs both at zod parse time AND inside `buildBridgeCommand`, so no shell metacharacters can reach the SSH command line even if the schema layer is bypassed.
+
+### Notes
+
+- Existing `tunnel.ts` SSH path now also logs the SHA-256 fingerprint as an informational stderr line, so users can copy it into their `known_hosts` and switch to `strict` mode at their leisure. No behavioral change for connections without `hostKeyPolicy` set.
+- Docker bridge tier requires `nc`, `socat`, or `ncat` inside the container. BusyBox `nc` ships in Alpine and the official `mysql`/`mariadb` images by default; check your custom images otherwise.
+
+### Tests
+
+- New: `tests/dockerTunnel.test.ts` (36) — command builder allowlist, schema validation, end-to-end Connection round-trip, backward-compat for legacy SSH configs.
+- New: `tests/sshHostKey.test.ts` (21) — known_hosts parsing, host pattern matching (exact, wildcard, bracket-port, hashed), fingerprint, key match, full verifier outcomes (matched / mismatch / unknown / revoked).
+- New: `tests/sshHostKeyVerifier.test.ts` (13) — `buildHostVerifier` behavior under `lenient` and `strict`, `@revoked` enforcement in both modes, `SshTunnelSchema` backward-compat assertions.
+- New: `tests/executor.test.ts` (12) — `buildBaseOptions` TLS shape under all four `ssl` × `sslServerName` permutations, plus invariant guarantees (`multipleStatements: false`, `decimalNumbers: false`, `connectTimeout: 15000`, etc.) that existing users rely on.
+- **Total: 169** (was 87). All previous tests still pass — zero behavioral regression for legacy connections.
+
 ## [0.4.1] — 2026-05-06
 
 ### Changed

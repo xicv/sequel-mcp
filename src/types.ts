@@ -25,12 +25,32 @@ export type Policy = z.infer<typeof PolicySchema>;
 export const PartialPolicySchema = PolicySchema.partial();
 export type PartialPolicy = z.infer<typeof PartialPolicySchema>;
 
+export const SshDockerSchema = z.object({
+  container: z
+    .string()
+    .min(1)
+    .max(128)
+    .regex(
+      /^[A-Za-z0-9][A-Za-z0-9_.-]*$/,
+      'container must match Docker naming rules (alnum, _, ., -)',
+    ),
+  bridgeTool: z.enum(['socat', 'nc', 'ncat']).default('nc'),
+});
+
+export type SshDocker = z.infer<typeof SshDockerSchema>;
+
+export const SshHostKeyPolicySchema = z.enum(['lenient', 'strict']);
+export type SshHostKeyPolicy = z.infer<typeof SshHostKeyPolicySchema>;
+
 export const SshTunnelSchema = z.object({
   host: z.string().min(1),
   port: z.number().int().positive().max(65535).default(22),
   user: z.string().min(1),
   authMethod: z.enum(['password', 'key']).default('key'),
   privateKeyPath: z.string().optional(),
+  docker: SshDockerSchema.optional(),
+  hostKeyPolicy: SshHostKeyPolicySchema.optional(),
+  knownHostsPath: z.string().optional(),
 });
 
 export type SshTunnel = z.infer<typeof SshTunnelSchema>;
@@ -42,6 +62,7 @@ export const ConnectionSchema = z.object({
   user: z.string().min(1),
   database: z.string().optional(),
   ssl: z.boolean().default(false),
+  sslServerName: z.string().min(1).max(253).optional(),
   ssh: SshTunnelSchema.optional(),
   policy: PolicySchema,
   databasePolicies: z.record(z.string().min(1).max(64), PartialPolicySchema).optional(),
